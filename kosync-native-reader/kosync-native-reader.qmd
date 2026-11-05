@@ -63,7 +63,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                 property var status: ({})
                 property var pending: ({})   // request id -> { callback, tries }
                 // Shown (hidden as dots) in the password field when logged in: the real
-                // password is never stored, only KOReader's md5 key.
+                // password is never stored, only its md5 key (kosync protocol).
                 readonly property string savedPassword: "\u0001saved-password\u0001"
 
                 function passwordRequest(action) {

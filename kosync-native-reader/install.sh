@@ -1,33 +1,48 @@
 #!/bin/sh
-# Install KOReader progress sync for the reMarkable's built-in EPUB reader.
+# Install KOReader progress sync (kosync) for the reMarkable's built-in EPUB reader.
 # Run ON THE DEVICE as root from this folder (deploy.sh in the repo root does that).
 #
-# Needs: KOReader with a Progress sync login (Tools > Progress sync), and xovi with
-# qt-resource-rebuilder for the reader patch.
-#
-#   KOREADER_DIR=/path/to/koreader sh install.sh   # override auto-detection
+# Standalone: kosync-bridge is a single static binary (Go, no dependencies). KOReader
+# is not needed. Needs xovi with qt-resource-rebuilder for the reader patch (sync
+# panel, auto pull on open / push on close).
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 UNIT=kosync-bridge.service
 QRR=/home/root/xovi/exthome/qt-resource-rebuilder
+STATE=/home/root/.local/share/kosync-bridge
 
-find_koreader() {
-    for d in "$KOREADER_DIR" /home/root/xovi/exthome/appload/koreader /home/root/koreader /opt/koreader; do
-        [ -n "$d" ] && [ -f "$d/reader.lua" ] && { echo "$d"; return; }
+[ -x "$HERE/kosync-bridge" ] || chmod +x "$HERE/kosync-bridge" 2>/dev/null || true
+"$HERE/kosync-bridge" --help >/dev/null 2>&1 || { echo "kosync-bridge binary doesn't run on this device (needs aarch64)."; exit 1; }
+
+# 1. Binary
+mkdir -p /home/root/bin "$STATE"
+systemctl stop "$UNIT" 2>/dev/null || true
+cp "$HERE/kosync-bridge" /home/root/bin/kosync-bridge.new
+chmod +x /home/root/bin/kosync-bridge.new
+mv /home/root/bin/kosync-bridge.new /home/root/bin/kosync-bridge
+
+# Clean up the earlier KOReader-based version (Lua bridge, KOReader patch, caches)
+rm -f /home/root/bin/kosync-bridge.lua
+for d in /home/root/xovi/exthome/appload/koreader /home/root/koreader /opt/koreader; do
+    rm -f "$d/patches/2-kosync-native-reader-percent.lua"
+done
+rm -rf "$STATE/cr3cache"
+
+# One-time convenience: reuse an existing KOReader Progress sync login, if there is
+# one and the bridge has none yet. (Not needed afterwards; log in in the reader.)
+if [ ! -f "$STATE/config.json" ]; then
+    for f in /home/root/xovi/exthome/appload/koreader/settings/kosync.lua /home/root/koreader/settings/kosync.lua; do
+        [ -f "$f" ] || continue
+        get() { sed -n "s/.*\[\"$1\"\] *= *\"\([^\"]*\)\".*/\1/p" "$f" | head -n 1; }
+        user="$(get username)"; key="$(get userkey)"; server="$(get custom_server)"
+        if [ -n "$user" ] && [ -n "$key" ]; then
+            printf '{"server":"%s","username":"%s","userkey":"%s"}\n' \
+                "${server:-https://sync.koreader.rocks}" "$user" "$key" > "$STATE/config.json"
+            echo "Imported the Progress sync login ($user) from KOReader."
+        fi
+        break
     done
-    d="$(find /home /opt -maxdepth 6 -name reader.lua -path '*koreader*' 2>/dev/null | sed -n 1p)"
-    [ -n "$d" ] && dirname "$d"
-}
-KO="$(find_koreader)"
-[ -n "$KO" ] || { echo "KOReader not found. Set KOREADER_DIR=/path/to/koreader"; exit 1; }
-echo "KOReader: $KO"
-grep -q '"userkey"' "$KO/settings/kosync.lua" 2>/dev/null \
-    || echo "NOTE: KOReader has no Progress sync login yet - log in under Tools > Progress sync; the bridge waits until then."
-
-# 1. Bridge + KOReader patch
-mkdir -p /home/root/bin "$KO/patches"
-cp "$HERE/kosync-bridge.lua" /home/root/bin/kosync-bridge.lua
-cp "$HERE/2-kosync-native-reader-percent.lua" "$KO/patches/"
+fi
 
 # 2. systemd service on the real rootfs (on newer OS versions /etc is a RAM overlay)
 UNIT_TEXT="[Unit]
@@ -36,8 +51,7 @@ After=xochitl.service
 
 [Service]
 Type=simple
-WorkingDirectory=$KO
-ExecStart=$KO/luajit /home/root/bin/kosync-bridge.lua
+ExecStart=/home/root/bin/kosync-bridge
 Restart=always
 RestartSec=30
 
@@ -53,31 +67,32 @@ ln -sf "/etc/systemd/system/$UNIT" "$ROOT/etc/systemd/system/multi-user.target.w
 sync; umount "$ROOT"; rmdir "$ROOT"
 mount -o remount,ro / 2>/dev/null || true
 # A running /etc overlay doesn't see files added underneath it: add them for this boot.
-if ! cmp -s "/etc/systemd/system/$UNIT" - <<EOF
-$UNIT_TEXT
-EOF
-then
-    printf '%s\n' "$UNIT_TEXT" > "/etc/systemd/system/$UNIT"
-    ln -sf "/etc/systemd/system/$UNIT" "/etc/systemd/system/multi-user.target.wants/$UNIT"
-fi
+printf '%s\n' "$UNIT_TEXT" > "/etc/systemd/system/$UNIT"
+ln -sf "/etc/systemd/system/$UNIT" "/etc/systemd/system/multi-user.target.wants/$UNIT"
 systemctl daemon-reload
 systemctl restart "$UNIT"
 
 # 3. Reader patch (applied by xovi's qt-resource-rebuilder when the UI starts)
 if [ -d "$QRR" ]; then
-    cp "$HERE/kosync-native-reader.qmd" "$QRR/"
-    if [ -f /etc/systemd/system/xochitl.service.d/00-xovi.conf ]; then
-        echo "Restarting the reMarkable UI to load the reader patch..."
-        systemctl reset-failed xochitl 2>/dev/null || true
-        systemctl restart xochitl
-    else
-        echo "xovi is not running right now: the reader patch loads the next time you start xovi."
+    if ! cmp -s "$HERE/kosync-native-reader.qmd" "$QRR/kosync-native-reader.qmd"; then
+        cp "$HERE/kosync-native-reader.qmd" "$QRR/"
+        if [ -f /etc/systemd/system/xochitl.service.d/00-xovi.conf ]; then
+            echo "Restarting the reMarkable UI to load the reader patch..."
+            systemctl reset-failed xochitl 2>/dev/null || true
+            systemctl restart xochitl
+        else
+            echo "xovi is not running right now: the reader patch loads the next time you start xovi."
+        fi
     fi
 else
-    echo "WARNING: qt-resource-rebuilder not found - pushing works, but books won't open at synced positions."
+    echo "WARNING: qt-resource-rebuilder (xovi) not found - background sync works, but there is"
+    echo "no sync panel and books don't jump to synced positions when opened."
 fi
 
 sleep 2
-systemctl is-active --quiet "$UNIT" && echo "Installed. Bridge log: journalctl -u $UNIT -f" \
-    || { echo "Bridge failed to start:"; journalctl -u "$UNIT" -n 10 --no-pager; exit 1; }
-echo "Restart KOReader once to load its patch."
+if systemctl is-active --quiet "$UNIT"; then
+    echo "Installed. Log in in the built-in reader: open an EPUB > three dots > Progress sync."
+    echo "Log: journalctl -u $UNIT -f"
+else
+    echo "Bridge failed to start:"; journalctl -u "$UNIT" -n 10 --no-pager; exit 1
+fi

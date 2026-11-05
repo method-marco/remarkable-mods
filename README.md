@@ -11,7 +11,7 @@ Vellum package. Every folder has a README with details.
 | [`sleepscreen-rotate/`](sleepscreen-rotate/) | Your own pictures as the sleep screen, a random one each time. | – (prepare pictures first, see below) |
 | [`secondary-pen-toolbar/`](secondary-pen-toolbar/) | The built-in second pen in the notes toolbar, right after the first pen. | xovi |
 | [`eraser-end-uses-eraser-tool/`](eraser-end-uses-eraser-tool/) | The Marker's eraser end erases with the Eraser tool's type and size. | xovi |
-| [`kosync-native-reader/`](kosync-native-reader/) | KOReader progress sync in the built-in EPUB reader: sync panel, auto pull on open / push on close. | KOReader, xovi |
+| [`kosync-native-reader/`](kosync-native-reader/) | KOReader progress sync in the built-in EPUB reader: sync panel, auto pull on open / push on close. Standalone (no KOReader needed). | xovi |
 
 ## Before you start
 
@@ -22,9 +22,9 @@ Vellum package. Every folder has a README with details.
    [Vellum](https://github.com/vellum-dev/vellum). xovi has to be **running** for these
    patches to load: on this setup it's started by triple-pressing the power button
    (xovi-tripletap) after every reboot, or with `/home/root/xovi/start`.
-3. For the **KOReader** mods: KOReader installed (e.g. as an AppLoad app). For
-   `kosync-native-reader`, log in to your sync server once under KOReader's
-   *Tools > Progress sync* - or later in the built-in reader's sync panel.
+3. For `koreader-library-sync`: KOReader installed (e.g. as an AppLoad app).
+4. For `kosync-native-reader`: after installing, log in to your sync server in the built-in
+   reader (open an EPUB > three dots > *Progress sync*).
 
 ## Install
 
@@ -49,11 +49,11 @@ once). Alternatively copy a folder to the device yourself and run `sh install.sh
 ./deploy.sh sleepscreen-rotate            # restarts the reMarkable UI once
 ./deploy.sh secondary-pen-toolbar         # restarts the UI (if xovi is running)
 ./deploy.sh eraser-end-uses-eraser-tool   # restarts the UI (if xovi is running)
-./deploy.sh kosync-native-reader          # restarts the UI; then restart KOReader once
+./deploy.sh kosync-native-reader          # restarts the UI (if xovi is running)
 ```
 
-- `koreader-library-sync` before `kosync-native-reader`: then KOReader and the built-in
-  reader open the very same EPUB files, so their sync positions always match.
+- If you also read in KOReader on the reMarkable: with `koreader-library-sync`, KOReader and
+  the built-in reader open the very same EPUB files, so they sync with each other too.
 - Installing a xovi mod while xovi isn't running is fine: the patch loads the next time
   you start xovi.
 - `sleepscreen-rotate`: `prepare-images.sh <folder>` turns a folder of photos into
