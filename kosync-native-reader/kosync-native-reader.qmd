@@ -1,0 +1,50 @@
+; kosync-native-reader: open EPUBs in the built-in reader at the position synced
+; from KOReader. kosync-bridge writes a note per book,
+;   /home/root/.local/share/kosync-bridge/pull/<document id>.json  {"page": N, ...}
+; when another device saved a newer position. When the book is opened, this jumps
+; to that page and clears the note.
+; Needs QML_XHR_ALLOW_FILE_READ/WRITE=1 (set by xovi's qt-resource-rebuilder).
+
+AFFECT /qml/device/view/documentview/DocumentView.qml
+    TRAVERSE FocusScope
+        RENAME openDocument TO _kosyncOrigOpenDocument
+        LOCATE AFTER ALL
+        INSERT {
+            function openDocument(documentToOpen) {
+                root._kosyncOrigOpenDocument(documentToOpen);
+                root._kosyncApplyPull(documentToOpen);
+            }
+
+            function _kosyncApplyPull(doc) {
+                if (!doc || doc.fileType !== Document.Ebook) {
+                    return;
+                }
+                const url = "file:///home/root/.local/share/kosync-bridge/pull/" + doc.id + ".json";
+                const xhr = new XMLHttpRequest();
+                xhr.onreadystatechange = function() {
+                    if (xhr.readyState !== XMLHttpRequest.DONE) {
+                        return;
+                    }
+                    let note = null;
+                    try {
+                        note = JSON.parse(xhr.responseText);
+                    } catch (e) {
+                        return;
+                    }
+                    if (!note || typeof note.page !== "number" || root.document !== doc) {
+                        return;
+                    }
+                    console.warn("[kosync-native-reader] synced position: page " + note.page + " from " + note.device);
+                    if (note.page !== root.currentPage) {
+                        sceneView.goToPage(note.page);
+                    }
+                    const clear = new XMLHttpRequest();
+                    clear.open("PUT", url);
+                    clear.send("{}");
+                };
+                xhr.open("GET", url);
+                xhr.send();
+            }
+        }
+    END TRAVERSE
+END AFFECT

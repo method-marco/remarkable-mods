@@ -1,0 +1,26 @@
+; secondary-pen-toolbar: show the built-in "Secondary pen" in the toolbar.
+;
+; xochitl already has a second pen (own tool, colour and size, remembered per
+; document), but it only shows when the toolbar's slot logic puts it in the main
+; row. On small screens (Paper Pro Move) it always loses its slot and hides itself.
+;
+; This adds a dedicated instance of xochitl's own SecondaryPenMenu right after the
+; main editing tools, independent of the slot logic.
+
+AFFECT /qt/qml/xofm/libs/toolbar/qml/Toolbar.qml
+    TRAVERSE FocusScope > Item#toolbar > GridLayout#toolLayout
+        LOCATE AFTER Repeater#editingTools
+        INSERT {
+            SecondaryPenMenu {
+                id: pinnedSecondaryPen
+                objectName: "pinnedSecondaryPenMenu"
+                toolbar: root
+                type: ToolbarTool.Type.ToolbarButton
+                group: ToolbarModel.Editing
+                antialiasing: root.antialiasing
+                visible: root.expanded
+                onSelect: (tool) => root._select(tool)
+            }
+        }
+    END TRAVERSE
+END AFFECT
