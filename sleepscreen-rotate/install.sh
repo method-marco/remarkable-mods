@@ -19,10 +19,32 @@ if ! strings /usr/bin/xochitl 2>/dev/null | grep -qx SleepScreenPath; then
     exit 1
 fi
 
-# 1. Pictures + script
+# 1. Pictures: mirror ./images/ into $DIR. ./images/ is the only source:
+#    identical pictures are left alone, missing/changed ones copied, all others deleted.
+#    Without ./images/ the pictures already on the device are left untouched.
 mkdir -p "$DIR" /home/root/bin
-if [ -d "$HERE/images" ]; then
-    for f in "$HERE"/images/*.png; do [ -f "$f" ] && cp "$f" "$DIR/"; done
+if ls "$HERE"/images/*.png >/dev/null 2>&1; then
+    added=0; kept=0; removed=0
+    for f in "$HERE"/images/*.png; do
+        dst="$DIR/$(basename "$f")"
+        if [ -f "$dst" ] && cmp -s "$f" "$dst"; then
+            kept=$((kept + 1))
+        else
+            cp "$f" "$dst.tmp" && mv -f "$dst.tmp" "$dst"
+            echo "add    $(basename "$f")"; added=$((added + 1))
+        fi
+    done
+    for p in "$DIR"/*.png; do
+        [ -f "$p" ] || continue
+        if [ ! -f "$HERE/images/$(basename "$p")" ]; then
+            rm -f "$p"; echo "delete $(basename "$p")"; removed=$((removed + 1))
+        fi
+    done
+    # Forget the last pick if that picture was deleted.
+    [ -f "$DIR/.last" ] && [ ! -f "$(cat "$DIR/.last")" ] && rm -f "$DIR/.last"
+    echo "Pictures: $added added, $kept unchanged, $removed deleted"
+else
+    echo "No ./images/ to install (run prepare-images.sh first) - pictures on the device left as they are."
 fi
 ls "$DIR"/*.png >/dev/null 2>&1 || echo "WARNING: no PNGs in $DIR yet - add some, rotation starts once there are pictures."
 [ -f "$DIR/.current.png" ] || cp /usr/share/remarkable/suspended.png "$DIR/.current.png"

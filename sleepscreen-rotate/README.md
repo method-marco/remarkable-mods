@@ -16,20 +16,37 @@ device sleeps (never the same one twice in a row).
 
 ## Install
 
-1. Prepare pictures on your computer (center-crops to the screen size, outputs PNGs into
-   `images/`, which is git-ignored):
+1. Prepare pictures on your computer from a folder of photos (`.jpg`, `.jpeg`, `.png`,
+   `.heic` directly inside it). They're center-cropped to the screen size and saved as
+   PNGs in `images/` (git-ignored):
 
    ```sh
-   ./prepare-images.sh ~/Pictures/*.jpg                # Paper Pro Move (954x1696)
-   ./prepare-images.sh 1620x2160 ~/Pictures/*.jpg      # Paper Pro
-   ./prepare-images.sh 1404x1872 ~/Pictures/*.jpg      # reMarkable 2
+   ./prepare-images.sh ~/Pictures/Sleepscreens                # Paper Pro Move (954x1696)
+   ./prepare-images.sh 1620x2160 ~/Pictures/Sleepscreens      # Paper Pro
+   ./prepare-images.sh 1404x1872 ~/Pictures/Sleepscreens      # reMarkable 2
    ```
 
 2. From the repo root: `./deploy.sh sleepscreen-rotate`. **The reMarkable UI restarts
    once** (closes open apps like KOReader).
 
-Add or remove pictures any time by copying PNGs into `/home/root/sleepscreens/` on the
-device; no reinstall needed.
+### The source folder is the only source of truth
+
+Both steps mirror it exactly: pictures already there and unchanged are left alone,
+missing or changed ones are added, and everything else is deleted.
+
+- `prepare-images.sh`: source folder -> `images/` (only new/changed photos are converted;
+  a different screen size rebuilds everything).
+- `install.sh` (via `deploy.sh`): `images/` -> `/home/root/sleepscreens/` on the device
+  (compared by content). Without an `images/` folder, the device's pictures are left as
+  they are.
+
+To change the rotation, edit the source folder and run both commands again:
+
+```sh
+./sleepscreen-rotate/prepare-images.sh ~/Pictures/Sleepscreens && ./deploy.sh sleepscreen-rotate
+```
+
+PNGs copied onto the device by hand are removed by the next deploy.
 
 ## Notes
 
