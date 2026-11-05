@@ -5,12 +5,24 @@ the reMarkable's **built-in** EPUB reader. Reading positions are shared with KOR
 the reMarkable and with any other kosync app (KOReader on other devices, Readest, ...).
 Uses the server and login you set up in KOReader (Tools > Progress sync).
 
+## In the built-in reader
+
+- **Automatic**: opening an EPUB pulls (jumps to a newer position from another device),
+  closing it pushes the current position.
+- **Sync panel**: the cloud button in the toolbar (EPUBs only) opens *Progress sync* with
+  **Push** / **Pull** for the open book, the login status, and **Server settings** (server,
+  username, password, Log in / Register / Log out). Logins are checked against the server
+  and saved in KOReader's Progress sync settings, so both apps use the same account.
+- **Errors** (no Wi-Fi, server unreachable, login rejected, bridge not running) are shown
+  in a short notice at the bottom of the screen. A push that fails is retried
+  automatically once the server is reachable again.
+
 ## How it works
 
 | Piece | Installed to | Does |
 | --- | --- | --- |
 | `kosync-bridge.lua` | `/home/root/bin/` + `kosync-bridge.service` | Background service (runs on KOReader's LuaJIT). Pushes the built-in reader's position when it changes; every 2 minutes it fetches newer positions from the server. |
-| `kosync-native-reader.qmd` | xovi `qt-resource-rebuilder` | When you open an EPUB in the built-in reader, it jumps to the synced page (if there's a newer one). |
+| `kosync-native-reader.qmd` | xovi `qt-resource-rebuilder` | Sync panel + toolbar button, auto pull on open / push on close, notices. Talks to the bridge through JSON files in `/home/root/.local/share/kosync-bridge/{cmd,result}/`. |
 | `2-kosync-native-reader-percent.lua` | `<koreader>/patches/` | KOReader on this device jumps to the exact percentage of positions from the built-in reader. |
 
 - **Matching books**: same partial MD5 as KOReader's "binary" document matching. Books from

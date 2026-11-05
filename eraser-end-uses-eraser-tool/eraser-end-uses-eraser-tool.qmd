@@ -1,0 +1,18 @@
+; eraser-end-uses-eraser-tool: the back of the Marker (eraser end) erases with the
+; settings chosen in the toolbar's Eraser tool (eraser type and size), instead of
+; xochitl's fixed default (normal eraser, medium size).
+;
+; In DeviceSceneView.qml the pen input handler hard-codes
+;   eraserThickness: calculateEraserThickness(2.4) / root.penScale
+; and never sets eraserTool. This binds both to the Eraser tool's settings, using the
+; same thickness formula xochitl uses for the toolbar eraser.
+
+AFFECT /qml/device/view/documentview/DeviceSceneView.qml
+    TRAVERSE FocusScope > ScenePenInputHandler#strokeHandler
+        REPLACE eraserThickness WITH {
+            eraserThickness: calculateEraserThickness(documentViewTools.eraserPen && documentViewTools.eraserPen.thickness > 0
+                                                      ? documentViewTools.eraserPen.thickness : 2.4) / root.penScale
+            eraserTool: documentViewTools.eraserPen ? documentViewTools.eraserPen.tool : Line.Eraser
+        }
+    END TRAVERSE
+END AFFECT

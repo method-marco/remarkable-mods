@@ -64,15 +64,38 @@ if not state.device_id then
 end
 local function save_state() writefile(STATE_FILE, json.encode(state)) end
 
--- KOReader's Progress sync settings (server, username, md5 password key)
+-- KOReader's Progress sync settings (server, username, md5 password key).
+-- The single source of truth for both KOReader and the built-in reader.
+local KOSYNC_SETTINGS = "settings/kosync.lua"
+local DEFAULT_SERVER = "https://sync.koreader.rocks"
+
+local function read_kosync_settings()
+    local ok, s = pcall(dofile, KOSYNC_SETTINGS)
+    return ok and type(s) == "table" and type(s.settings) == "table" and s.settings or {}
+end
+
 local function load_login()
-    local ok, s = pcall(dofile, "settings/kosync.lua")
-    local t = ok and type(s) == "table" and s.settings or nil
-    if not (t and t.username and t.userkey) then return nil end
+    local t = read_kosync_settings()
+    if not (t.username and t.userkey) then return nil end
     return {
-        server = (t.custom_server or "https://sync.koreader.rocks"):gsub("/+$", ""),
+        server = (t.custom_server or DEFAULT_SERVER):gsub("/+$", ""),
         user = t.username, key = t.userkey,
     }
+end
+
+-- Update KOReader's kosync settings, keeping all its other options.
+local function save_kosync_settings(changes)
+    local LuaSettings = require("luasettings")
+    local s = LuaSettings:open(KOSYNC_SETTINGS)
+    local t = s:readSetting("settings") or {}
+    local defaults = { auto_sync = false, sync_forward = 1, sync_backward = 3,
+                       checksum_method = 0, send_metadata = false }
+    for k, v in pairs(defaults) do if t[k] == nil then t[k] = v end end
+    for k, v in pairs(changes) do
+        if v == false then t[k] = nil else t[k] = v end
+    end
+    s:saveSetting("settings", t)
+    s:flush()
 end
 
 -- Same digest as KOReader's "binary" document matching (util.partialMD5).
@@ -204,29 +227,33 @@ local function push_changes(login)
             -- pushing, so an older local position never overwrites the server
             b.pushed_page, b.pushed_ts = info.page, 0
             changed = true
-        elseif b and b.digest and info.page ~= b.pushed_page then
-            if b.expect_page == info.page then
+        elseif b and b.digest and (b.retry_page or info.page) ~= b.pushed_page then
+            -- a failed push from the reader (retry_page) wins over the saved page
+            local page = b.retry_page or info.page
+            if b.expect_page == page then
                 -- we just jumped there because of a pull: nothing new to report
-                b.pushed_page, b.expect_page = info.page, nil
+                b.pushed_page, b.expect_page, b.retry_page = page, nil, nil
                 changed = true
             else
-                local pct = info.page / info.pages
+                local pct = page / info.pages
                 local xp = b.spine and xpointer_for(b.spine, pct) or "/body/DocFragment[1]/body"
                 local code, res = request(login, "PUT", "/syncs/progress", json.encode({
                     document = b.digest, progress = xp, percentage = pct,
                     device = DEVICE_NAME, device_id = state.device_id,
                 }))
                 if code == 200 then
-                    b.pushed_page = info.page
+                    b.pushed_page, b.expect_page, b.retry_page = page, nil, nil
                     b.pushed_ts = type(res) == "table" and tonumber(res.timestamp) or os.time()
-                    b.expect_page = nil
                     changed = true
-                    log("push", info.name, string.format("page %d/%d (%.1f%%) %s", info.page, info.pages, pct * 100, xp))
+                    log("push", info.name, string.format("page %d/%d (%.1f%%) %s", page, info.pages, pct * 100, xp))
                 else
                     log("push failed", info.name, tostring(code), type(res) == "string" and res or "")
                     break -- probably offline; retry next round
                 end
             end
+        elseif b and b.retry_page and b.retry_page == b.pushed_page then
+            b.retry_page = nil
+            changed = true
         end
     end
     if changed then save_state() end
@@ -270,6 +297,172 @@ local function pull_changes(login)
     if changed then save_state() end
 end
 
+-------------------------------------------------------------------------------
+-- Requests from the built-in reader's sync panel (kosync-native-reader.qmd).
+-- The panel writes <STATE>/cmd/<id>.json, we answer in <STATE>/result/<id>.json.
+-------------------------------------------------------------------------------
+local CMD_DIR, RESULT_DIR = STATE_DIR .. "/cmd", STATE_DIR .. "/result"
+lfs.mkdir(CMD_DIR); lfs.mkdir(RESULT_DIR)
+local STATUS_FILE = STATE_DIR .. "/status.json"
+
+local function write_status(extra)
+    local t = read_kosync_settings()
+    local st = readjson(STATUS_FILE) or {}
+    st.server = t.custom_server or DEFAULT_SERVER
+    st.username = t.username or ""
+    st.logged_in = (t.username and t.userkey) and true or false
+    for k, v in pairs(extra or {}) do st[k] = v end
+    local text = json.encode(st)
+    if text ~= readfile(STATUS_FILE) then writefile(STATUS_FILE, text) end
+end
+
+local function pct_text(p) return p < 0.1 and string.format("%.1f%%", p * 100) or string.format("%d%%", math.floor(p * 100 + 0.5)) end
+
+-- Human-readable error for a failed request (code = HTTP status, or nil + error text).
+local function err_text(what, code, res)
+    if not code then
+        local e = tostring(res or "")
+        if e:match("timeout") then return what .. " failed: the sync server didn't answer (timeout)." end
+        return what .. " failed: can't reach the sync server. Is Wi-Fi on?"
+    end
+    if code == 401 or code == 403 then return what .. " failed: login rejected. Log in again under Server settings." end
+    if code >= 500 then return what .. " failed: server error (" .. code .. "). Try again later." end
+    local msg = type(res) == "table" and (res.message or res.error)
+    return what .. " failed (HTTP " .. code .. (msg and (": " .. tostring(msg)) or "") .. ")."
+end
+
+-- c.auto = true: sent automatically when an EPUB is closed. Then nothing is pushed
+-- if the page didn't change (or we only got there by pulling).
+local function cmd_push(login, c)
+    local b = book_state(c.doc)
+    local pages = tonumber(c.pages) or 0
+    if not (b and b.digest) or pages < 1 then return false, "This book can't be synced." end
+    local page = math.max(0, math.min(pages - 1, tonumber(c.page) or 0))
+    if c.auto and (page == b.pushed_page or page == b.expect_page) then
+        if page == b.expect_page then b.pushed_page, b.expect_page = page, nil; save_state() end
+        return true, "", { skipped = true }
+    end
+    local pct = page / pages
+    local xp = b.spine and xpointer_for(b.spine, pct) or "/body/DocFragment[1]/body"
+    local code, res = request(login, "PUT", "/syncs/progress", json.encode({
+        document = b.digest, progress = xp, percentage = pct,
+        device = DEVICE_NAME, device_id = state.device_id,
+    }))
+    if code ~= 200 then
+        -- remember it: the background loop retries once we're online again
+        b.retry_page = page; save_state()
+        return false, err_text("Push", code, res)
+    end
+    b.pushed_page, b.expect_page, b.retry_page = page, nil, nil
+    b.pushed_ts = type(res) == "table" and tonumber(res.timestamp) or os.time()
+    os.remove(STATE_DIR .. "/pull/" .. c.doc .. ".json")
+    save_state()
+    log(c.auto and "push (on close)" or "push (panel)", c.doc, pct_text(pct))
+    return true, "Pushed " .. pct_text(pct) .. " (page " .. (page + 1) .. " of " .. pages .. ")."
+end
+
+-- c.auto = true: sent automatically when an EPUB is opened. Then we only move if the
+-- server position is newer than this reMarkable's last push of the book.
+local function cmd_pull(login, c)
+    local b = book_state(c.doc)
+    local pages = tonumber(c.pages) or 0
+    if not (b and b.digest) or pages < 1 then return false, "This book can't be synced." end
+    local code, res = request(login, "GET", "/syncs/progress/" .. b.digest)
+    if code ~= 200 then return false, err_text("Pull", code, res) end
+    if type(res) ~= "table" or not tonumber(res.percentage) then
+        if c.auto then return true, "", { skipped = true } end
+        return false, "No position saved on the server for this book yet."
+    end
+    local ts = tonumber(res.timestamp) or 0
+    if res.device_id == state.device_id then
+        if c.auto then return true, "", { skipped = true } end
+        return true, "The latest position (" .. pct_text(res.percentage) .. ") is from this reMarkable."
+    end
+    if c.auto and ts <= (b.pushed_ts or 0) then
+        return true, "", { skipped = true }
+    end
+    local target = math.floor(tonumber(res.percentage) * pages + 0.5)
+    target = math.max(0, math.min(pages - 1, target))
+    b.pulled_ts = math.max(b.pulled_ts or 0, ts)
+    os.remove(STATE_DIR .. "/pull/" .. c.doc .. ".json")
+    if target == tonumber(c.page) then
+        save_state()
+        if c.auto then return true, "", { skipped = true } end
+        return true, "Already at the latest position (" .. pct_text(res.percentage) .. ")."
+    end
+    b.expect_page = target
+    save_state()
+    log(c.auto and "pull (on open)" or "pull (panel)", c.doc, pct_text(res.percentage), tostring(res.device))
+    return true, "Synced to " .. pct_text(res.percentage) .. " from " .. tostring(res.device or "another device") .. ".",
+           { page = target }
+end
+
+local function cmd_account(c)
+    local server = (c.server and c.server ~= "" and c.server or DEFAULT_SERVER):gsub("%s", ""):gsub("/+$", "")
+    if not server:match("^https?://") then server = "https://" .. server end
+    if c.action == "logout" then
+        save_kosync_settings({ username = false, userkey = false })
+        return true, "Logged out."
+    end
+    if c.action == "server" then
+        save_kosync_settings({ custom_server = server })
+        return true, "Server set to " .. server .. "."
+    end
+    local user, pass = c.username or "", c.password or ""
+    if user == "" or pass == "" then return false, "Enter a username and password." end
+    local temp = { server = server, user = user, key = md5(pass) }
+    local code, res
+    if c.action == "register" then
+        code, res = request(temp, "POST", "/users/create",
+                            json.encode({ username = user, password = temp.key }))
+        if code == 402 then return false, "That username is already taken." end
+        if code ~= 201 and code ~= 200 then return false, "Registration failed (" .. tostring(code or res) .. ")." end
+    else
+        code, res = request(temp, "GET", "/users/auth")
+        if code == 401 then return false, "Wrong username or password." end
+        if code ~= 200 then return false, "Login failed (" .. tostring(code or res) .. "). Check the server and Wi-Fi." end
+    end
+    save_kosync_settings({ custom_server = server, username = user, userkey = temp.key })
+    log(c.action, "ok as", user, "on", server)
+    return true, (c.action == "register" and "Registered and logged in as " or "Logged in as ") .. user .. "."
+end
+
+local function process_commands()
+    local files = {}
+    for f in lfs.dir(CMD_DIR) do
+        if f:match("^[%w%-_]+%.json$") then files[#files + 1] = f end
+    end
+    table.sort(files)
+    for _, f in ipairs(files) do
+        local path = CMD_DIR .. "/" .. f
+        local c = readjson(path)
+        os.remove(path)
+        if c and c.action then
+            local ok, okres, msg, extra = pcall(function()
+                if c.action == "status" then return true, "" end
+                if c.action == "push" or c.action == "pull" then
+                    local login = load_login()
+                    if not login then return false, "Not logged in. Log in under Server settings." end
+                    if c.action == "push" then return cmd_push(login, c) end
+                    return cmd_pull(login, c)
+                end
+                return cmd_account(c)
+            end)
+            if not ok then okres, msg = false, "Error: " .. tostring(okres) end
+            local result = { ok = okres and true or false, message = msg or "" }
+            for k, v in pairs(extra or {}) do result[k] = v end
+            writefile(RESULT_DIR .. "/" .. f, json.encode(result))
+            write_status({ last_message = result.message, last_time = os.date("%H:%M") })
+        end
+    end
+    -- results the panel never picked up
+    for f in lfs.dir(RESULT_DIR) do
+        local p = RESULT_DIR .. "/" .. f
+        local attr = lfs.attributes(p)
+        if attr and attr.mode == "file" and os.time() - attr.modification > 300 then os.remove(p) end
+    end
+end
+
 if arg and arg[1] == "--check" then
     -- offline self-test: digests and chapter mapping, no network, no state changes
     for _, id in ipairs(list_epubs()) do
@@ -287,20 +480,27 @@ if arg and arg[1] == "--check" then
 end
 
 log("kosync-bridge started, device_id " .. state.device_id)
-local last_pull = 0
+write_status()
+local last_pull, last_push = 0, 0
 while true do
-    local login = load_login()
-    if login then
-        local ok, err = pcall(push_changes, login)
-        if not ok then log("push error:", tostring(err)) end
-        if os.time() - last_pull >= PULL_EVERY or ONCE then
-            ok, err = pcall(pull_changes, login)
-            if not ok then log("pull error:", tostring(err)) end
-            last_pull = os.time()
+    local ok, err = pcall(process_commands)
+    if not ok then log("command error:", tostring(err)) end
+    if os.time() - last_push >= PUSH_EVERY or ONCE then
+        last_push = os.time()
+        local login = load_login()
+        if login then
+            ok, err = pcall(push_changes, login)
+            if not ok then log("push error:", tostring(err)) end
+            if os.time() - last_pull >= PULL_EVERY or ONCE then
+                ok, err = pcall(pull_changes, login)
+                if not ok then log("pull error:", tostring(err)) end
+                last_pull = os.time()
+            end
+        elseif ONCE then
+            log("No Progress sync login in KOReader (settings/kosync.lua).")
         end
-    elseif ONCE then
-        log("No Progress sync login in KOReader (settings/kosync.lua).")
+        write_status()
     end
     if ONCE then break end
-    socket.sleep(PUSH_EVERY)
+    socket.sleep(1)
 end

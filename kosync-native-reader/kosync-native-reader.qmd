@@ -1,18 +1,438 @@
-; kosync-native-reader: open EPUBs in the built-in reader at the position synced
-; from KOReader. kosync-bridge writes a note per book,
-;   /home/root/.local/share/kosync-bridge/pull/<document id>.json  {"page": N, ...}
-; when another device saved a newer position. When the book is opened, this jumps
-; to that page and clears the note.
-; Needs QML_XHR_ALLOW_FILE_READ/WRITE=1 (set by xovi's qt-resource-rebuilder).
+; kosync-native-reader: KOReader progress sync inside the built-in EPUB reader.
+;
+; - Toolbar (EPUBs only): a cloud button that opens the "Progress sync" panel:
+;   push / pull the current book, status, and server + account settings.
+; - Opening an EPUB pulls automatically: if another device saved a newer position,
+;   the reader jumps there (offline: a note kosync-bridge fetched earlier is used).
+; - Closing an EPUB pushes the current position automatically.
+; - Sync results and errors are shown in a short notice at the bottom of the screen.
+;
+; All network work is done by kosync-bridge (systemd service). The panel talks to it
+; through small JSON files (cmd/ -> result/) using QML's XMLHttpRequest on file:// URLs,
+; which xovi's qt-resource-rebuilder enables (QML_XHR_ALLOW_FILE_READ/WRITE=1).
 
-AFFECT /qml/device/view/documentview/DocumentView.qml
+AFFECT /qt/qml/xofm/libs/toolbar/qml/Toolbar.qml
     TRAVERSE FocusScope
-        RENAME openDocument TO _kosyncOrigOpenDocument
         LOCATE AFTER ALL
         INSERT {
+            property var kosyncHost: null
+        }
+    END TRAVERSE
+    TRAVERSE FocusScope > Item#toolbar > GridLayout#toolLayout
+        LOCATE AFTER Repeater#editingTools
+        INSERT {
+            ArkControls.ToolButton {
+                id: kosyncToolbarButton
+                objectName: "kosyncToolbarButton"
+                iconSource: "qrc:/ark/icons/cloud"
+                focusPolicy: Qt.NoFocus
+                visible: root.expanded && root.documentType === "ebook" && !!root.kosyncHost
+                onClicked: root.kosyncHost.kosyncOpenPanel()
+            }
+        }
+    END TRAVERSE
+END AFFECT
+
+AFFECT /qml/device/view/documentview/DocumentView.qml
+    TRAVERSE FocusScope > Item#_uiContainer > Toolbar#toolbar
+        LOCATE AFTER ALL
+        INSERT {
+            kosyncHost: root
+        }
+    END TRAVERSE
+
+    TRAVERSE FocusScope > Item#_uiContainer
+        LOCATE AFTER ALL
+        INSERT {
+            Item {
+                id: kosyncPanel
+                objectName: "kosyncPanel"
+                anchors.fill: parent
+                visible: false
+                z: 10000
+
+                readonly property string base: "file:///home/root/.local/share/kosync-bridge/"
+                property bool busy: false
+                property string message: ""
+                property var status: ({})
+                property var pending: ({})   // request id -> { callback, tries }
+
+                function readJson(url, callback) {
+                    const xhr = new XMLHttpRequest();
+                    xhr.onreadystatechange = function() {
+                        if (xhr.readyState !== XMLHttpRequest.DONE) {
+                            return;
+                        }
+                        let value = null;
+                        try {
+                            value = JSON.parse(xhr.responseText);
+                        } catch (e) {
+                            value = null;
+                        }
+                        callback(value);
+                    };
+                    xhr.open("GET", url);
+                    xhr.send();
+                }
+
+                function writeJson(url, value) {
+                    const xhr = new XMLHttpRequest();
+                    xhr.open("PUT", url);
+                    xhr.send(JSON.stringify(value));
+                }
+
+                function refreshStatus() {
+                    readJson(base + "status.json", function(st) {
+                        kosyncPanel.status = st || {};
+                        if (st && !kosyncServerField.activeFocus) {
+                            kosyncServerField.text = st.server || "";
+                        }
+                        if (st && !kosyncUserField.activeFocus && kosyncUserField.text === "") {
+                            kosyncUserField.text = st.username || "";
+                        }
+                    });
+                }
+
+                // Send a request to kosync-bridge; callback(result) gets
+                // { ok, message, ... } or a timeout error.
+                function call(request, callback) {
+                    if (!request) {
+                        return;
+                    }
+                    const id = Date.now().toString() + "-" + Math.floor(Math.random() * 100000);
+                    pending[id] = { callback: callback || null, tries: 0 };
+                    writeJson(base + "cmd/" + id + ".json", request);
+                    kosyncPoll.start();
+                }
+
+                // Panel buttons: one at a time, result shown in the panel.
+                function send(request, callback) {
+                    if (busy || !request) {
+                        return;
+                    }
+                    busy = true;
+                    message = qsTr("Working…");
+                    call(request, function(result) {
+                        kosyncPanel.busy = false;
+                        kosyncPanel.message = result.message || (result.ok ? qsTr("Done.") : qsTr("Failed."));
+                        if (callback) {
+                            callback(result);
+                        }
+                        kosyncPanel.refreshStatus();
+                    });
+                }
+
+                function bookRequest(action, auto) {
+                    if (!root.document || root.document.fileType !== Document.Ebook) {
+                        return null;
+                    }
+                    return { action: action, doc: root.document.id, auto: !!auto,
+                             page: root.currentPage, pages: root.document.pageCount };
+                }
+
+                Timer {
+                    id: kosyncPoll
+                    interval: 700
+                    repeat: true
+                    onTriggered: {
+                        const ids = Object.keys(kosyncPanel.pending);
+                        if (ids.length === 0) {
+                            stop();
+                            return;
+                        }
+                        ids.forEach(function(id) {
+                            const entry = kosyncPanel.pending[id];
+                            if (!entry) {
+                                return;
+                            }
+                            entry.tries++;
+                            if (entry.tries > 60) {
+                                delete kosyncPanel.pending[id];
+                                if (entry.callback) {
+                                    entry.callback({ ok: false, message: qsTr("Sync failed: kosync-bridge isn't answering. Is the service running?") });
+                                }
+                                return;
+                            }
+                            kosyncPanel.readJson(kosyncPanel.base + "result/" + id + ".json", function(res) {
+                                if (res && kosyncPanel.pending[id]) {
+                                    delete kosyncPanel.pending[id];
+                                    if (entry.callback) {
+                                        entry.callback(res);
+                                    }
+                                }
+                            });
+                        });
+                    }
+                }
+
+                // tap outside the card closes the panel
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: kosyncPanel.visible = false
+                }
+
+                Rectangle {
+                    id: kosyncCard
+                    width: Math.min(parent.width - 60, 820)
+                    height: kosyncColumn.implicitHeight + 60
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    y: 150
+                    color: "white"
+                    border.color: "black"
+                    border.width: 3
+                    radius: 16
+
+                    MouseArea {
+                        anchors.fill: parent
+                    }
+
+                    Column {
+                        id: kosyncColumn
+                        x: 30
+                        y: 30
+                        width: kosyncCard.width - 60
+                        spacing: 16
+
+                        ArkControls.Title {
+                            type: ArkControls.Title.Large
+                            text: qsTr("Progress sync")
+                        }
+
+                        ArkControls.Label {
+                            width: parent.width
+                            wrapMode: Text.Wrap
+                            type: ArkControls.Label.Medium
+                            text: kosyncPanel.status.logged_in
+                                  ? qsTr("Logged in as %1 on %2").arg(kosyncPanel.status.username).arg(kosyncPanel.status.server)
+                                  : qsTr("Not logged in. Enter your account below.")
+                        }
+
+                        Row {
+                            width: parent.width
+                            spacing: 20
+                            ArkControls.Button {
+                                type: ArkTokens.Button.primary
+                                text: qsTr("Push")
+                                iconSource: "qrc:/ark/icons/cloud_upload"
+                                width: (parent.width - parent.spacing) / 2
+                                enabled: !kosyncPanel.busy && !!kosyncPanel.status.logged_in
+                                onClicked: kosyncPanel.send(kosyncPanel.bookRequest("push"))
+                            }
+                            ArkControls.Button {
+                                type: ArkTokens.Button.primary
+                                text: qsTr("Pull")
+                                iconSource: "qrc:/ark/icons/cloud_download"
+                                width: (parent.width - parent.spacing) / 2
+                                enabled: !kosyncPanel.busy && !!kosyncPanel.status.logged_in
+                                onClicked: kosyncPanel.send(kosyncPanel.bookRequest("pull"), function(res) {
+                                    if (res.ok && typeof res.page === "number" && root.document) {
+                                        sceneView.goToPage(res.page);
+                                    }
+                                })
+                            }
+                        }
+
+                        ArkControls.Label {
+                            width: parent.width
+                            wrapMode: Text.Wrap
+                            type: ArkControls.Label.LargeStrong
+                            text: kosyncPanel.message
+                            visible: text !== ""
+                        }
+
+                        Rectangle {
+                            width: parent.width
+                            height: 2
+                            color: "black"
+                        }
+
+                        ArkControls.Label {
+                            type: ArkControls.Label.LargeStrong
+                            text: qsTr("Server settings")
+                        }
+
+                        ArkControls.Label {
+                            type: ArkControls.Label.Medium
+                            text: qsTr("Server")
+                        }
+                        ArkControls.InputField {
+                            id: kosyncServerField
+                            width: parent.width
+                            clip: true
+                            inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhUrlCharactersOnly | Qt.ImhNoPredictiveText
+                        }
+
+                        ArkControls.Label {
+                            type: ArkControls.Label.Medium
+                            text: qsTr("Username")
+                        }
+                        ArkControls.InputField {
+                            id: kosyncUserField
+                            width: parent.width
+                            clip: true
+                            inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
+                        }
+
+                        ArkControls.Label {
+                            type: ArkControls.Label.Medium
+                            text: qsTr("Password")
+                        }
+                        ArkControls.InputField {
+                            id: kosyncPasswordField
+                            width: parent.width
+                            clip: true
+                            echoMode: TextInput.Password
+                            inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText | Qt.ImhSensitiveData
+                        }
+
+                        Row {
+                            width: parent.width
+                            spacing: 20
+                            ArkControls.Button {
+                                type: ArkTokens.Button.secondary
+                                text: qsTr("Log in")
+                                width: (parent.width - 2 * parent.spacing) / 3
+                                enabled: !kosyncPanel.busy
+                                onClicked: kosyncPanel.send({ action: "login", server: kosyncServerField.text,
+                                                              username: kosyncUserField.text, password: kosyncPasswordField.text },
+                                                            function() { kosyncPasswordField.text = ""; })
+                            }
+                            ArkControls.Button {
+                                type: ArkTokens.Button.secondary
+                                text: qsTr("Register")
+                                width: (parent.width - 2 * parent.spacing) / 3
+                                enabled: !kosyncPanel.busy
+                                onClicked: kosyncPanel.send({ action: "register", server: kosyncServerField.text,
+                                                              username: kosyncUserField.text, password: kosyncPasswordField.text },
+                                                            function() { kosyncPasswordField.text = ""; })
+                            }
+                            ArkControls.Button {
+                                type: ArkTokens.Button.secondary
+                                text: qsTr("Log out")
+                                width: (parent.width - 2 * parent.spacing) / 3
+                                enabled: !kosyncPanel.busy && !!kosyncPanel.status.logged_in
+                                onClicked: kosyncPanel.send({ action: "logout" })
+                            }
+                        }
+
+                        ArkControls.Button {
+                            type: ArkTokens.Button.tertiary
+                            text: qsTr("Close")
+                            width: parent.width
+                            onClicked: kosyncPanel.visible = false
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                id: kosyncNotice
+                objectName: "kosyncNotice"
+                property alias text: kosyncNoticeLabel.text
+                visible: false
+                z: 10001
+                width: Math.min(parent.width - 60, 860)
+                height: kosyncNoticeLabel.implicitHeight + 40
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 60
+                color: "white"
+                border.color: "black"
+                border.width: 3
+                radius: 16
+
+                function show(message) {
+                    if (!message) {
+                        return;
+                    }
+                    text = message;
+                    visible = true;
+                    kosyncNoticeTimer.restart();
+                }
+
+                ArkControls.Label {
+                    id: kosyncNoticeLabel
+                    x: 20
+                    width: parent.width - 40
+                    anchors.verticalCenter: parent.verticalCenter
+                    wrapMode: Text.Wrap
+                    type: ArkControls.Label.Medium
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: kosyncNotice.visible = false
+                }
+
+                Timer {
+                    id: kosyncNoticeTimer
+                    interval: 5000
+                    onTriggered: kosyncNotice.visible = false
+                }
+            }
+        }
+    END TRAVERSE
+
+    TRAVERSE FocusScope
+        RENAME openDocument TO _kosyncOrigOpenDocument
+        RENAME close TO _kosyncOrigClose
+        LOCATE AFTER ALL
+        INSERT {
+            function kosyncOpenPanel() {
+                kosyncPanel.message = "";
+                kosyncPasswordField.text = "";
+                kosyncPanel.refreshStatus();
+                kosyncPanel.visible = true;
+            }
+
             function openDocument(documentToOpen) {
                 root._kosyncOrigOpenDocument(documentToOpen);
                 root._kosyncApplyPull(documentToOpen);
+                root._kosyncAutoPull(documentToOpen);
+            }
+
+            function close() {
+                root._kosyncAutoPush();
+                root._kosyncOrigClose();
+            }
+
+            // Push the position of the EPUB that is being closed.
+            function _kosyncAutoPush() {
+                const request = kosyncPanel.bookRequest("push", true);
+                if (!request) {
+                    return;
+                }
+                kosyncPanel.call(request, function(res) {
+                    if (!res.ok) {
+                        // shown if another document is open by then; kosync-bridge retries later
+                        console.warn("[kosync-native-reader] push on close: " + res.message);
+                        kosyncNotice.show(res.message + " " + qsTr("It will be retried automatically."));
+                    }
+                });
+            }
+
+            // Ask the server for a newer position when an EPUB is opened.
+            function _kosyncAutoPull(doc) {
+                if (!doc || doc.fileType !== Document.Ebook) {
+                    return;
+                }
+                const request = kosyncPanel.bookRequest("pull", true);
+                if (!request) {
+                    return;
+                }
+                kosyncPanel.call(request, function(res) {
+                    if (root.document !== doc) {
+                        return;
+                    }
+                    if (!res.ok) {
+                        kosyncNotice.show(res.message);
+                        return;
+                    }
+                    if (typeof res.page === "number" && res.page !== root.currentPage) {
+                        sceneView.goToPage(res.page);
+                        kosyncNotice.show(res.message);
+                    }
+                });
             }
 
             function _kosyncApplyPull(doc) {

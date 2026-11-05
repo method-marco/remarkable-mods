@@ -1,25 +1,54 @@
-; secondary-pen-toolbar: show the built-in "Secondary pen" in the toolbar.
+; secondary-pen-toolbar: show the built-in "Secondary pen" in the toolbar,
+; right after the primary pen.
 ;
 ; xochitl already has a second pen (own tool, colour and size, remembered per
 ; document), but it only shows when the toolbar's slot logic puts it in the main
 ; row. On small screens (Paper Pro Move) it always loses its slot and hides itself.
 ;
-; This adds a dedicated instance of xochitl's own SecondaryPenMenu right after the
-; main editing tools, independent of the slot logic.
+; The main editing tools come from a Repeater over xochitl's tool model, so nothing
+; can be inserted between them directly. This wraps the Repeater's delegate: every
+; tool is drawn exactly as before, and the delegate of the primary pen additionally
+; loads one instance of xochitl's own SecondaryPenMenu right next to it.
 
 AFFECT /qt/qml/xofm/libs/toolbar/qml/Toolbar.qml
-    TRAVERSE FocusScope > Item#toolbar > GridLayout#toolLayout
-        LOCATE AFTER Repeater#editingTools
-        INSERT {
-            SecondaryPenMenu {
-                id: pinnedSecondaryPen
-                objectName: "pinnedSecondaryPenMenu"
-                toolbar: root
-                type: ToolbarTool.Type.ToolbarButton
-                group: ToolbarModel.Editing
-                antialiasing: root.antialiasing
-                visible: root.expanded
-                onSelect: (tool) => root._select(tool)
+    TRAVERSE FocusScope > Item#toolbar > GridLayout#toolLayout > Repeater#editingTools
+        REPLACE delegate WITH {
+            delegate: GridLayout {
+                id: editingToolSlot
+                required property var model
+                required property int index
+                flow: toolLayout.flow
+                rowSpacing: 0
+                columnSpacing: 0
+                visible: editingToolLoader.visible || pinnedSecondaryPenLoader.visible
+                z: editingToolLoader.z
+
+                ToolLoader {
+                    id: editingToolLoader
+                    model: editingToolSlot.model
+                    objectName: "editingToolLoader_" + item?.objectName
+                    buttonType: ToolbarTool.Type.ToolbarButton
+                    toolbar: root
+                    antialiasing: root.antialiasing
+                    asynchronous: !root.visible
+                    visible: shown && root.expanded
+                    z: item?.totalHeight > root.height ? 1 : 0
+                    onSelect: (tool) => root._select(tool)
+                }
+
+                Loader {
+                    id: pinnedSecondaryPenLoader
+                    active: editingToolSlot.model.tool === ToolbarModel.PrimaryPen
+                    visible: active && root.expanded
+                    sourceComponent: SecondaryPenMenu {
+                        objectName: "pinnedSecondaryPenMenu"
+                        toolbar: root
+                        type: ToolbarTool.Type.ToolbarButton
+                        group: ToolbarModel.Editing
+                        antialiasing: root.antialiasing
+                        onSelect: (tool) => root._select(tool)
+                    }
+                }
             }
         }
     END TRAVERSE
