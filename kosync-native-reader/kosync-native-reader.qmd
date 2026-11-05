@@ -1,6 +1,6 @@
 ; kosync-native-reader: KOReader progress sync inside the built-in EPUB reader.
 ;
-; - Toolbar (EPUBs only): a cloud button that opens the "Progress sync" panel:
+; - Toolbar "more" menu (three dots, EPUBs only): "Progress sync" opens a panel with
 ;   push / pull the current book, status, and server + account settings.
 ; - Opening an EPUB pulls automatically: if another device saved a newer position,
 ;   the reader jumps there (offline: a note kosync-bridge fetched earlier is used).
@@ -18,16 +18,22 @@ AFFECT /qt/qml/xofm/libs/toolbar/qml/Toolbar.qml
             property var kosyncHost: null
         }
     END TRAVERSE
-    TRAVERSE FocusScope > Item#toolbar > GridLayout#toolLayout
-        LOCATE AFTER Repeater#editingTools
+END AFFECT
+
+AFFECT /qt/qml/xofm/libs/toolbar/qml/SettingsMenu.qml
+    TRAVERSE ToolbarTool > Component#settingsComponent > ColumnLayout#content
+        LOCATE AFTER Repeater#utilityTools
         INSERT {
-            ArkControls.ToolButton {
-                id: kosyncToolbarButton
-                objectName: "kosyncToolbarButton"
+            ArkControls.FoldoutItem {
+                objectName: "kosyncSettingsMenuItem"
+                Layout.fillWidth: true
+                visible: root.documentType === "ebook" && !!root.toolbar.kosyncHost
+                label: qsTr("Progress sync")
                 iconSource: "qrc:/ark/icons/cloud"
-                focusPolicy: Qt.NoFocus
-                visible: root.expanded && root.documentType === "ebook" && !!root.kosyncHost
-                onClicked: root.kosyncHost.kosyncOpenPanel()
+                onClicked: {
+                    root.toolbar.closeFoldout();
+                    root.toolbar.kosyncHost.kosyncOpenPanel();
+                }
             }
         }
     END TRAVERSE
@@ -56,6 +62,24 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                 property string message: ""
                 property var status: ({})
                 property var pending: ({})   // request id -> { callback, tries }
+                // Shown (hidden as dots) in the password field when logged in: the real
+                // password is never stored, only KOReader's md5 key.
+                readonly property string savedPassword: "\u0001saved-password\u0001"
+
+                function passwordRequest(action) {
+                    const pw = kosyncPasswordField.text;
+                    const req = { action: action, server: kosyncServerField.text, username: kosyncUserField.text };
+                    if (pw === savedPassword) {
+                        req.keep_key = true;
+                    } else {
+                        req.password = pw;
+                    }
+                    return req;
+                }
+
+                function showSavedPassword() {
+                    kosyncPasswordField.text = status.logged_in ? savedPassword : "";
+                }
 
                 function readJson(url, callback) {
                     const xhr = new XMLHttpRequest();
@@ -84,6 +108,9 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                 function refreshStatus() {
                     readJson(base + "status.json", function(st) {
                         kosyncPanel.status = st || {};
+                        if (!kosyncPasswordField.activeFocus) {
+                            kosyncPanel.showSavedPassword();
+                        }
                         if (st && !kosyncServerField.activeFocus) {
                             kosyncServerField.text = st.server || "";
                         }
@@ -126,7 +153,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                     if (!root.document || root.document.fileType !== Document.Ebook) {
                         return null;
                     }
-                    return { action: action, doc: root.document.id, auto: !!auto,
+                    return { action: action, doc: "" + root.document.id, auto: !!auto,
                              page: root.currentPage, pages: root.document.pageCount };
                 }
 
@@ -283,6 +310,14 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                             clip: true
                             echoMode: TextInput.Password
                             inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText | Qt.ImhSensitiveData
+                            // tapping the saved (hidden) password clears it for typing a new one
+                            onActiveFocusChanged: {
+                                if (activeFocus && text === kosyncPanel.savedPassword) {
+                                    text = "";
+                                } else if (!activeFocus && text === "") {
+                                    kosyncPanel.showSavedPassword();
+                                }
+                            }
                         }
 
                         Row {
@@ -293,18 +328,14 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                                 text: qsTr("Log in")
                                 width: (parent.width - 2 * parent.spacing) / 3
                                 enabled: !kosyncPanel.busy
-                                onClicked: kosyncPanel.send({ action: "login", server: kosyncServerField.text,
-                                                              username: kosyncUserField.text, password: kosyncPasswordField.text },
-                                                            function() { kosyncPasswordField.text = ""; })
+                                onClicked: kosyncPanel.send(kosyncPanel.passwordRequest("login"))
                             }
                             ArkControls.Button {
                                 type: ArkTokens.Button.secondary
                                 text: qsTr("Register")
                                 width: (parent.width - 2 * parent.spacing) / 3
                                 enabled: !kosyncPanel.busy
-                                onClicked: kosyncPanel.send({ action: "register", server: kosyncServerField.text,
-                                                              username: kosyncUserField.text, password: kosyncPasswordField.text },
-                                                            function() { kosyncPasswordField.text = ""; })
+                                onClicked: kosyncPanel.send(kosyncPanel.passwordRequest("register"))
                             }
                             ArkControls.Button {
                                 type: ArkTokens.Button.secondary
@@ -380,7 +411,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
         INSERT {
             function kosyncOpenPanel() {
                 kosyncPanel.message = "";
-                kosyncPasswordField.text = "";
+                kosyncPanel.showSavedPassword();
                 kosyncPanel.refreshStatus();
                 kosyncPanel.visible = true;
             }

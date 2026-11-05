@@ -9,10 +9,13 @@ Uses the server and login you set up in KOReader (Tools > Progress sync).
 
 - **Automatic**: opening an EPUB pulls (jumps to a newer position from another device),
   closing it pushes the current position.
-- **Sync panel**: the cloud button in the toolbar (EPUBs only) opens *Progress sync* with
-  **Push** / **Pull** for the open book, the login status, and **Server settings** (server,
-  username, password, Log in / Register / Log out). Logins are checked against the server
-  and saved in KOReader's Progress sync settings, so both apps use the same account.
+- **Sync panel**: in an EPUB, open the toolbar's three-dots menu (*Ebook settings*) and tap
+  **Progress sync**. It has **Push** / **Pull** for the open book, the login status, and
+  **Server settings** (server, username, password, Log in / Register / Log out). Logins are
+  checked against the server and saved in KOReader's Progress sync settings, so both apps
+  use the same account. Only an md5 key is stored, never the password itself: when logged
+  in, the password field shows a hidden placeholder; tap it to type a new password, or
+  press Log in as-is to keep the saved login.
 - **Errors** (no Wi-Fi, server unreachable, login rejected, bridge not running) are shown
   in a short notice at the bottom of the screen. A push that fails is retried
   automatically once the server is reachable again.
@@ -22,7 +25,7 @@ Uses the server and login you set up in KOReader (Tools > Progress sync).
 | Piece | Installed to | Does |
 | --- | --- | --- |
 | `kosync-bridge.lua` | `/home/root/bin/` + `kosync-bridge.service` | Background service (runs on KOReader's LuaJIT). Pushes the built-in reader's position when it changes; every 2 minutes it fetches newer positions from the server. |
-| `kosync-native-reader.qmd` | xovi `qt-resource-rebuilder` | Sync panel + toolbar button, auto pull on open / push on close, notices. Talks to the bridge through JSON files in `/home/root/.local/share/kosync-bridge/{cmd,result}/`. |
+| `kosync-native-reader.qmd` | xovi `qt-resource-rebuilder` | Sync panel (three-dots menu), auto pull on open / push on close, notices. Talks to the bridge through JSON files in `/home/root/.local/share/kosync-bridge/{cmd,result}/`. |
 | `2-kosync-native-reader-percent.lua` | `<koreader>/patches/` | KOReader on this device jumps to the exact percentage of positions from the built-in reader. |
 
 - **Matching books**: same partial MD5 as KOReader's "binary" document matching. Books from

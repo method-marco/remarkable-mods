@@ -409,8 +409,17 @@ local function cmd_account(c)
         return true, "Server set to " .. server .. "."
     end
     local user, pass = c.username or "", c.password or ""
-    if user == "" or pass == "" then return false, "Enter a username and password." end
-    local temp = { server = server, user = user, key = md5(pass) }
+    local key
+    if c.keep_key then
+        -- password field still shows the saved (hidden) password: reuse its key
+        key = read_kosync_settings().userkey
+        if not key then return false, "Enter your password." end
+    else
+        if pass == "" then return false, "Enter a username and password." end
+        key = md5(pass)
+    end
+    if user == "" then return false, "Enter a username and password." end
+    local temp = { server = server, user = user, key = key }
     local code, res
     if c.action == "register" then
         code, res = request(temp, "POST", "/users/create",
@@ -438,7 +447,13 @@ local function process_commands()
         local c = readjson(path)
         os.remove(path)
         if c and c.action then
+            if c.doc ~= nil and (type(c.doc) ~= "string" or not c.doc:match("^[%w%-]+$")) then
+                c.doc = nil
+            end
             local ok, okres, msg, extra = pcall(function()
+                if (c.action == "push" or c.action == "pull") and not c.doc then
+                    return false, "Sync failed: this document has no valid ID."
+                end
                 if c.action == "status" then return true, "" end
                 if c.action == "push" or c.action == "pull" then
                     local login = load_login()

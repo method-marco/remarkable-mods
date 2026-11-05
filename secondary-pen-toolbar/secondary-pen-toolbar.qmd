@@ -20,7 +20,9 @@ AFFECT /qt/qml/xofm/libs/toolbar/qml/Toolbar.qml
                 flow: toolLayout.flow
                 rowSpacing: 0
                 columnSpacing: 0
-                visible: editingToolLoader.visible || pinnedSecondaryPenLoader.visible
+                // Not based on the children's `visible`: a child of an invisible item reads
+                // as invisible, so the slot could never become visible again.
+                visible: root.expanded && (editingToolLoader.shown || pinnedSecondaryPenLoader.active)
                 z: editingToolLoader.z
 
                 ToolLoader {
