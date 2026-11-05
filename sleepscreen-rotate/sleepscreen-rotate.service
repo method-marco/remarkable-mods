@@ -1,0 +1,12 @@
+[Unit]
+Description=Random reMarkable sleep screen rotation
+After=xochitl.service
+
+[Service]
+Type=simple
+ExecStart=/home/root/bin/sleepscreen-rotate.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
