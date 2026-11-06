@@ -255,7 +255,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                                 enabled: !kosyncPanel.busy && !!kosyncPanel.status.logged_in
                                 onClicked: kosyncPanel.send(kosyncPanel.bookRequest("pull"), function(res) {
                                     if (res.ok && typeof res.page === "number" && root.document) {
-                                        sceneView.goToPage(res.page);
+                                        root.openPage(res.page); // also saves it as the book's last page
                                     }
                                 })
                             }
@@ -487,7 +487,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                         return;
                     }
                     if (typeof res.page === "number" && res.page !== root.currentPage) {
-                        sceneView.goToPage(res.page);
+                        root.openPage(res.page); // also saves it as the book's last page
                         kosyncNotice.show(res.message);
                     }
                 });
@@ -514,7 +514,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                     }
                     console.warn("[kosync-native-reader] synced position: page " + note.page + " from " + note.device);
                     if (note.page !== root.currentPage) {
-                        sceneView.goToPage(note.page);
+                        root.openPage(note.page); // also saves it as the book's last page
                     }
                     const clear = new XMLHttpRequest();
                     clear.open("PUT", url);
