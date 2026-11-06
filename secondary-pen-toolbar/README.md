@@ -13,8 +13,12 @@ screens (Paper Pro Move: 6 slots) it's always pushed into "more tools", where it
 itself.
 
 This mod adds a dedicated instance of xochitl's own `SecondaryPenMenu` right after the
-main editing tools (`Toolbar.qml`), independent of the slot logic. Everything else
+first pen (`Toolbar.qml`), independent of the slot logic. Everything else
 (pen menu, colours, sizes, selection) is xochitl's built-in behaviour.
+
+The toolbar doesn't count the extra button, so the row would be one button too long and
+the last button (three dots) would slide under the close button. Instead of dropping a
+tool, the tool buttons are made slightly narrower when needed so all of them fit.
 
 ## Install
 
@@ -27,5 +31,5 @@ main editing tools (`Toolbar.qml`), independent of the slot logic. Everything el
 
 - Written against reMarkable OS 3.29 (Paper Pro Move). The patch targets QML files that
   may change in other OS versions; if the patch doesn't apply, xochitl just runs without it.
-- With the toolbar on the left/right side of the screen there's room for many more tools,
-  and xochitl may then show its own second pen button as well.
+- If xochitl ever gives its own second pen button a slot (larger screens), that button
+  is hidden so the pen doesn't appear twice.

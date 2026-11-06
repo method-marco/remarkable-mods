@@ -9,8 +9,27 @@
 ; can be inserted between them directly. This wraps the Repeater's delegate: every
 ; tool is drawn exactly as before, and the delegate of the primary pen additionally
 ; loads one instance of xochitl's own SecondaryPenMenu right next to it.
+;
+; The toolbar decides how many tools fit (showableToolsCount) without counting the
+; pinned pen, so the row would be one button too long and the last button (three
+; dots) would slide under the close button. Instead of dropping a tool, the tool
+; buttons share the space: each gets slightly narrower when needed.
 
 AFFECT /qt/qml/xofm/libs/toolbar/qml/Toolbar.qml
+    TRAVERSE FocusScope
+        LOCATE AFTER showableToolsCount
+        INSERT {
+            readonly property bool pinnedPenHorizontal: toolLayout.flow === GridLayout.LeftToRight
+            // Room for the tools after the hide/show button: at most showableToolsCount
+            // stock tools + the pinned pen. Full size if they fit, else shared equally.
+            readonly property real pinnedPenToolExtent: {
+                const size = ArkTokens.Style.variable.controlsHeight.large;
+                const length = (pinnedPenHorizontal ? toolLayout.width : toolLayout.height) - size;
+                const count = Math.max(1, showableToolsCount + 1);
+                return Math.max(1, Math.min(size, Math.floor(length / count)));
+            }
+        }
+    END TRAVERSE
     TRAVERSE FocusScope > Item#toolbar > GridLayout#toolLayout > Repeater#editingTools
         REPLACE delegate WITH {
             delegate: GridLayout {
@@ -20,9 +39,11 @@ AFFECT /qt/qml/xofm/libs/toolbar/qml/Toolbar.qml
                 flow: toolLayout.flow
                 rowSpacing: 0
                 columnSpacing: 0
+                // The stock secondary pen (if the toolbar ever gives it a slot) is replaced by the pinned one.
+                readonly property bool stockShown: editingToolLoader.shown && editingToolSlot.model.tool !== ToolbarModel.SecondaryPen
                 // Not based on the children's `visible`: a child of an invisible item reads
                 // as invisible, so the slot could never become visible again.
-                visible: root.expanded && (editingToolLoader.shown || pinnedSecondaryPenLoader.active)
+                visible: root.expanded && (stockShown || pinnedSecondaryPenLoader.active)
                 z: editingToolLoader.z
 
                 ToolLoader {
@@ -33,15 +54,19 @@ AFFECT /qt/qml/xofm/libs/toolbar/qml/Toolbar.qml
                     toolbar: root
                     antialiasing: root.antialiasing
                     asynchronous: !root.visible
-                    visible: shown && root.expanded
+                    visible: editingToolSlot.stockShown && root.expanded
                     z: item?.totalHeight > root.height ? 1 : 0
                     onSelect: (tool) => root._select(tool)
+                    Layout.preferredWidth: root.pinnedPenHorizontal ? root.pinnedPenToolExtent : -1
+                    Layout.preferredHeight: root.pinnedPenHorizontal ? -1 : root.pinnedPenToolExtent
                 }
 
                 Loader {
                     id: pinnedSecondaryPenLoader
                     active: editingToolSlot.model.tool === ToolbarModel.PrimaryPen
                     visible: active && root.expanded
+                    Layout.preferredWidth: root.pinnedPenHorizontal ? root.pinnedPenToolExtent : -1
+                    Layout.preferredHeight: root.pinnedPenHorizontal ? -1 : root.pinnedPenToolExtent
                     sourceComponent: SecondaryPenMenu {
                         objectName: "pinnedSecondaryPenMenu"
                         toolbar: root
@@ -51,6 +76,22 @@ AFFECT /qt/qml/xofm/libs/toolbar/qml/Toolbar.qml
                         onSelect: (tool) => root._select(tool)
                     }
                 }
+            }
+        }
+    END TRAVERSE
+    TRAVERSE FocusScope > Item#toolbar > GridLayout#toolLayout > Repeater#secondaryTools
+        REPLACE delegate WITH {
+            delegate: ToolLoader {
+                objectName: "secondaryToolLoader_" + item?.objectName
+                buttonType: ToolbarTool.Type.ToolbarButton
+                toolbar: root
+                antialiasing: root.antialiasing
+                asynchronous: !root.visible
+                visible: shown && root.expanded
+                z: item?.totalHeight > root.height ? 1 : 0
+                onSelect: (tool) => root._select(tool)
+                Layout.preferredWidth: root.pinnedPenHorizontal ? root.pinnedPenToolExtent : -1
+                Layout.preferredHeight: root.pinnedPenHorizontal ? -1 : root.pinnedPenToolExtent
             }
         }
     END TRAVERSE
