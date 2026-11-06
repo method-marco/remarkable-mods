@@ -37,8 +37,16 @@ reMarkable. Requires xovi with qt-resource-rebuilder for the reader integration.
   - KOReader -> built-in page: the text at KOReader's position is searched in the PDF
     pages around the expected page. The reader's pages overlap by a line, so the page
     where the text is nearest the top wins.
-  - Apps that only send a percentage (e.g. Readest) are mapped by text share. Pages with
-    almost no text (comics, image-only pages) fall back to the page percentage.
+  - Apps that only send a percentage (e.g. Readest) are mapped by text share.
+  - **Fallback: the reader's table of contents.** For pages without matchable text
+    (comics, image-only pages) the bridge uses the chapter start pages the built-in reader
+    computes for its current layout (saved by the patch as `toc/<id>.json`), matched with
+    the EPUB's own table of contents (nav / NCX). Within a chapter it interpolates by the
+    chapter's text, or by its files (comics usually have one file per page). This is the
+    same idea the reader itself uses to keep your place when you change the font, except
+    that the bridge only needs it where text matching isn't possible. Only without a table
+    of contents does it fall back to the page percentage.
+  - Each push/pull is logged with the method used: `text`, `chapter` or `estimate`.
   - Checked against KOReader's own engines (MuPDF, crengine) on real books: PDF text is
     identical on every page, and KOReader positions are read and produced identically
     (`./build.sh` + `kosync-bridge verify`, see `bridge/verify.go`).
@@ -50,7 +58,8 @@ reMarkable. Requires xovi with qt-resource-rebuilder for the reader integration.
 ## Files on the device
 
 `/home/root/.local/share/kosync-bridge/`: `config.json` (server, username, md5 key),
-`state.json` (device id, per-book sync state), `status.json`, `cmd/`, `result/`, `pull/`.
+`state.json` (device id, per-book sync state), `status.json`, `cmd/`, `result/`, `pull/`,
+`toc/` (the reader's table of contents per book).
 
 ## Install
 

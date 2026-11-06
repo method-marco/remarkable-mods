@@ -6,6 +6,8 @@
 ;   the reader jumps there (offline: a note kosync-bridge fetched earlier is used).
 ; - Closing an EPUB pushes the current position automatically.
 ; - Sync results and errors are shown in a short notice at the bottom of the screen.
+; - The reader's table of contents (chapter -> page) is saved for the bridge, which
+;   uses it as fallback for pages without matchable text (comics, images).
 ;
 ; All network work is done by kosync-bridge (systemd service). The panel talks to it
 ; through small JSON files (cmd/ -> result/) using QML's XMLHttpRequest on file:// URLs,
@@ -399,6 +401,31 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                     id: kosyncNoticeTimer
                     interval: 5000
                     onTriggered: kosyncNotice.visible = false
+                }
+            }
+        }
+    END TRAVERSE
+
+    TRAVERSE FocusScope
+        LOCATE AFTER ALL
+        INSERT {
+            // Save the reader's table of contents (chapter -> page in the current
+            // layout) for kosync-bridge: its fallback for pages without matchable text.
+            Connections {
+                target: root.document
+                function onTableOfContentsUpdated(results) {
+                    const doc = root.document;
+                    if (!doc || doc.fileType !== Document.Ebook || !results) {
+                        return;
+                    }
+                    const toc = [];
+                    for (let i = 0; i < results.length; i++) {
+                        const e = results[i];
+                        toc.push({ name: "" + e.name, page: e.page, level: e.level });
+                    }
+                    const xhr = new XMLHttpRequest();
+                    xhr.open("PUT", "file:///home/root/.local/share/kosync-bridge/toc/" + doc.id + ".json");
+                    xhr.send(JSON.stringify({ pageCount: doc.pageCount, toc: toc }));
                 }
             }
         }

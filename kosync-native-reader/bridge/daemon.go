@@ -194,21 +194,29 @@ func book(id string) *bookState {
 	return b
 }
 
-// position to push for a page: exact by text, else estimated
-func pushPosition(id string, page, pages int) (string, float64, bool) {
+// position to push for a page: exact by text, else via the reader's table of
+// contents, else estimated. method: "text", "chapter" or "estimate".
+func pushPosition(id string, page, pages int) (string, float64, string) {
 	if xp, pct, ok := positionForPage(id, page); ok {
-		return xp, pct, true
+		return xp, pct, "text"
 	}
-	return "/body/DocFragment[1]/body", float64(page) / float64(pages), false
+	if xp, pct, ok := chapterPush(id, page, pages); ok {
+		return xp, pct, "chapter"
+	}
+	return "/body/DocFragment[1]/body", float64(page) / float64(pages), "estimate"
 }
 
-// page for a server position: exact by text, else estimated
-func pullTarget(id string, res progressResp, pages int) (int, bool) {
+// page for a server position: exact by text, else via the reader's table of
+// contents, else estimated from the percentage.
+func pullTarget(id string, res progressResp, pages int) (int, string) {
 	if p, ok := pageForRemote(id, res.Progress, res.Percentage); ok {
-		return min(p, pages-1), true
+		return min(p, pages-1), "text"
+	}
+	if p, ok := chapterPull(id, res.Progress, pages); ok {
+		return p, "chapter"
 	}
 	t := int(math.Round(res.Percentage * float64(pages)))
-	return max(0, min(pages-1, t)), false
+	return max(0, min(pages-1, t)), "estimate"
 }
 
 // ---- kosync API -------------------------------------------------------------------
@@ -282,7 +290,7 @@ func pctText(p float64) string {
 }
 
 // putProgress pushes a page; returns the server timestamp.
-func putProgress(c config, id string, b *bookState, page, pages int) (int64, string, float64, bool, string) {
+func putProgress(c config, id string, b *bookState, page, pages int) (int64, string, float64, string, string) {
 	xp, pct, exact := pushPosition(id, page, pages)
 	code, body, err := request(c, "PUT", "/syncs/progress", map[string]any{
 		"document": b.Digest, "progress": xp, "percentage": pct,
@@ -358,7 +366,7 @@ func pushChanges(c config) {
 			return // probably offline; retry next round
 		}
 		b.PushedPage, b.PushedTS, b.ExpectPage, b.RetryPage, changed = intp(page), ts, nil, nil, true
-		logf("push %s page %d/%d (%.1f%%) %s%s", info.name, page+1, info.pages, pct*100, xp, map[bool]string{false: " (estimated)"}[exact])
+		logf("push %s page %d/%d (%.1f%%) %s%s", info.name, page+1, info.pages, pct*100, xp, " ("+exact+")")
 	}
 }
 
@@ -394,7 +402,7 @@ func pullChanges(c config) {
 					writeJSON(notePath, map[string]any{"page": target, "percentage": res.Percentage,
 						"device": res.Device, "timestamp": res.Timestamp})
 					logf("pull %s -> page %d/%d (%.1f%% from %s)%s", info.name, target+1, info.pages,
-						res.Percentage*100, res.Device, map[bool]string{false: " (estimated)"}[exact])
+						res.Percentage*100, res.Device, " ("+exact+")")
 				}
 			}
 		}
@@ -460,7 +468,7 @@ func cmdPush(c config, id string, cmd command) (bool, string, map[string]any) {
 	b.PushedPage, b.PushedTS, b.ExpectPage, b.RetryPage = intp(page), ts, nil, nil
 	os.Remove(filepath.Join(stateDir, "pull", id+".json"))
 	saveState()
-	logf("push (%s) %s page %d %s %s%s", map[bool]string{true: "on close", false: "panel"}[cmd.Auto], id, page+1, pctText(pct), xp, map[bool]string{false: " (estimated)"}[exact])
+	logf("push (%s) %s page %d %s %s%s", map[bool]string{true: "on close", false: "panel"}[cmd.Auto], id, page+1, pctText(pct), xp, " ("+exact+")")
 	return true, fmt.Sprintf("Pushed %s (page %d of %d).", pctText(pct), page+1, cmd.Pages), nil
 }
 
@@ -505,7 +513,7 @@ func cmdPull(c config, id string, cmd command) (bool, string, map[string]any) {
 	if from == "" {
 		from = "another device"
 	}
-	logf("pull (%s) %s -> page %d %s from %s%s", map[bool]string{true: "on open", false: "panel"}[cmd.Auto], id, target+1, pctText(res.Percentage), from, map[bool]string{false: " (estimated)"}[exact])
+	logf("pull (%s) %s -> page %d %s from %s%s", map[bool]string{true: "on open", false: "panel"}[cmd.Auto], id, target+1, pctText(res.Percentage), from, " ("+exact+")")
 	return true, fmt.Sprintf("Synced to %s from %s.", pctText(res.Percentage), from), map[string]any{"page": target}
 }
 
@@ -641,7 +649,7 @@ func handle(cmd command) (result map[string]any) {
 // ---- main loop --------------------------------------------------------------------
 
 func runDaemon(once bool) {
-	for _, d := range []string{stateDir, filepath.Join(stateDir, "cmd"), filepath.Join(stateDir, "result"), filepath.Join(stateDir, "pull")} {
+	for _, d := range []string{stateDir, filepath.Join(stateDir, "cmd"), filepath.Join(stateDir, "result"), filepath.Join(stateDir, "pull"), filepath.Join(stateDir, "toc")} {
 		os.MkdirAll(d, 0o755)
 	}
 	loadState()

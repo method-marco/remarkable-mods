@@ -25,6 +25,7 @@ import (
 
 type domNode struct {
 	name     string // element name (lower case); "" for text nodes
+	id       string // id attribute (link targets of the table of contents)
 	text     []rune // text nodes only
 	children []*domNode
 	parent   *domNode
@@ -34,6 +35,7 @@ func (n *domNode) isText() bool { return n.name == "" }
 
 type epubBook struct {
 	frags []*domNode // body element of each spine item (nil if missing)
+	toc   []tocEntry // the EPUB's own table of contents, in reading order
 	// whole-book text index
 	texts   []*domNode // all text nodes in reading order
 	norm    string     // normalized text of the whole book
@@ -84,6 +86,11 @@ func parseXHTML(data []byte) (*domNode, error) {
 		switch t := tok.(type) {
 		case xml.StartElement:
 			n := &domNode{name: strings.ToLower(t.Name.Local), parent: cur}
+			for _, a := range t.Attr {
+				if a.Name.Local == "id" {
+					n.id = a.Value
+				}
+			}
 			cur.children = append(cur.children, n)
 			cur = n
 		case xml.EndElement:
@@ -175,12 +182,24 @@ func findElem(n *domNode, name string) *domNode {
 
 type opfPackage struct {
 	Manifest []struct {
-		ID   string `xml:"id,attr"`
-		Href string `xml:"href,attr"`
+		ID         string `xml:"id,attr"`
+		Href       string `xml:"href,attr"`
+		MediaType  string `xml:"media-type,attr"`
+		Properties string `xml:"properties,attr"`
 	} `xml:"manifest>item"`
-	Spine []struct {
-		IDRef string `xml:"idref,attr"`
-	} `xml:"spine>itemref"`
+	Spine struct {
+		Toc      string `xml:"toc,attr"`
+		Itemrefs []struct {
+			IDRef string `xml:"idref,attr"`
+		} `xml:"itemref"`
+	} `xml:"spine"`
+}
+
+// tocEntry: one chapter of the EPUB's table of contents.
+type tocEntry struct {
+	title  string
+	frag   int    // spine item (1-based, = DocFragment index); 0 if unknown
+	anchor string // element id within that file, "" for the file start
 }
 
 func openEPUB(file string) (*epubBook, error) {
@@ -240,7 +259,11 @@ func openEPUB(file string) (*epubBook, error) {
 	b := &epubBook{}
 	var srcRunes []rune
 	var srcPos []int
-	for _, it := range pkg.Spine {
+	fragOf := map[string]int{}
+	for i, it := range pkg.Spine.Itemrefs {
+		fragOf[hrefs[it.IDRef]] = i + 1
+	}
+	for _, it := range pkg.Spine.Itemrefs {
 		var body *domNode
 		if data, err := read(hrefs[it.IDRef]); err == nil {
 			if doc, err := parseXHTML(data); err == nil || doc != nil {
@@ -269,6 +292,7 @@ func openEPUB(file string) (*epubBook, error) {
 		}
 		walk(body)
 	}
+	b.toc = readTOC(pkg, hrefs, fragOf, read)
 	normText, mapping := normalize(srcRunes, srcPos)
 	b.norm = normText
 	b.normPos = make([]textPos, len(mapping))
@@ -462,4 +486,170 @@ func (b *epubBook) normIndex(t *domNode, off int) int {
 		}
 	}
 	return lo
+}
+
+// ---- table of contents ------------------------------------------------------------
+
+// readTOC reads the EPUB 3 nav document (or the EPUB 2 NCX) into chapters in
+// reading order, each pointing at a spine item and optional anchor.
+func readTOC(pkg opfPackage, hrefs map[string]string, fragOf map[string]int, read func(string) ([]byte, error)) []tocEntry {
+	target := func(base, href string) (int, string) {
+		h, frag, _ := strings.Cut(href, "#")
+		h, _ = url.PathUnescape(h)
+		if base != "." && base != "" {
+			h = path.Join(base, h)
+		}
+		return fragOf[path.Clean(h)], frag
+	}
+	navPath, ncxPath := "", ""
+	for _, it := range pkg.Manifest {
+		if strings.Contains(" "+it.Properties+" ", " nav ") {
+			navPath = hrefs[it.ID]
+		}
+		if it.MediaType == "application/x-dtbncx+xml" || it.ID == pkg.Spine.Toc {
+			ncxPath = hrefs[it.ID]
+		}
+	}
+	var out []tocEntry
+	if navPath != "" {
+		if data, err := read(navPath); err == nil {
+			out = navEntries(data, path.Dir(navPath), target)
+		}
+	}
+	if len(out) == 0 && ncxPath != "" {
+		if data, err := read(ncxPath); err == nil {
+			out = ncxEntries(data, path.Dir(ncxPath), target)
+		}
+	}
+	return out
+}
+
+// navEntries: <a href> links inside the <nav epub:type="toc"> (or the first <nav>).
+func navEntries(data []byte, base string, target func(string, string) (int, string)) []tocEntry {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	dec.Strict, dec.AutoClose, dec.Entity = false, xml.HTMLAutoClose, xml.HTMLEntity
+	var out []tocEntry
+	navDepth, inToc, sawToc := 0, false, false
+	var cur *tocEntry
+	var title strings.Builder
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			name := strings.ToLower(t.Name.Local)
+			if name == "nav" {
+				navDepth++
+				isToc := false
+				for _, a := range t.Attr {
+					if a.Name.Local == "type" && strings.Contains(a.Value, "toc") {
+						isToc = true
+					}
+				}
+				if navDepth == 1 && (isToc || !sawToc) {
+					inToc, sawToc = true, sawToc || isToc
+					if isToc {
+						out = out[:0] // prefer the real toc nav over an earlier one
+					}
+				}
+			}
+			if name == "a" && inToc {
+				for _, a := range t.Attr {
+					if a.Name.Local == "href" {
+						f, anchor := target(base, a.Value)
+						cur = &tocEntry{frag: f, anchor: anchor}
+						title.Reset()
+					}
+				}
+			}
+		case xml.CharData:
+			if cur != nil {
+				title.Write(t)
+			}
+		case xml.EndElement:
+			name := strings.ToLower(t.Name.Local)
+			if name == "a" && cur != nil {
+				cur.title = strings.Join(strings.Fields(title.String()), " ")
+				out = append(out, *cur)
+				cur = nil
+			}
+			if name == "nav" {
+				navDepth--
+				if navDepth == 0 {
+					inToc = false
+				}
+			}
+		}
+	}
+	return out
+}
+
+// ncxEntries: navPoints in document order (navLabel/text + content/@src).
+func ncxEntries(data []byte, base string, target func(string, string) (int, string)) []tocEntry {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	dec.Strict = false
+	var out []tocEntry
+	var stack []int // indexes into out of the open navPoints
+	inText := false
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch strings.ToLower(t.Name.Local) {
+			case "navpoint":
+				out = append(out, tocEntry{})
+				stack = append(stack, len(out)-1)
+			case "text":
+				inText = len(stack) > 0
+			case "content":
+				if len(stack) > 0 {
+					for _, a := range t.Attr {
+						if a.Name.Local == "src" {
+							e := &out[stack[len(stack)-1]]
+							e.frag, e.anchor = target(base, a.Value)
+						}
+					}
+				}
+			}
+		case xml.CharData:
+			if inText && len(stack) > 0 {
+				if e := &out[stack[len(stack)-1]]; e.title == "" {
+					e.title = strings.Join(strings.Fields(string(t)), " ")
+				}
+			}
+		case xml.EndElement:
+			switch strings.ToLower(t.Name.Local) {
+			case "text":
+				inText = false
+			case "navpoint":
+				if len(stack) > 0 {
+					stack = stack[:len(stack)-1]
+				}
+			}
+		}
+	}
+	return out
+}
+
+// findID returns the element with the given id below n.
+func findID(n *domNode, id string) *domNode {
+	if n == nil {
+		return nil
+	}
+	if n.id == id {
+		return n
+	}
+	for _, c := range n.children {
+		if !c.isText() {
+			if f := findID(c, id); f != nil {
+				return f
+			}
+		}
+	}
+	return nil
 }

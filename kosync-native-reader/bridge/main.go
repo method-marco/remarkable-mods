@@ -31,6 +31,8 @@ func main() {
 		runCheck()
 	case args[0] == "--map" && len(args) >= 4:
 		runMap(args[1], args[2], args[3], args[4:])
+	case args[0] == "--toc" && len(args) == 2:
+		runTOC(args[1])
 	case args[0] == "--map-all" && len(args) >= 2:
 		step := 25
 		if len(args) >= 3 {
@@ -55,8 +57,8 @@ func runCheck() {
 		}
 		digest, _ := partialMD5(xochitlDir + "/" + id + ".epub")
 		t0 := time.Now()
-		xp, pct, exact := positionForPage(id, info.page)
-		fmt.Printf("%s  %s\n  digest %s  page %d/%d -> %s (%.1f%%, exact=%v, %.1fs)\n",
+		xp, pct, exact := pushPosition(id, info.page, info.pages)
+		fmt.Printf("%s  %s\n  digest %s  page %d/%d -> %s (%.1f%%, %s, %.1fs)\n",
 			id, info.name, digest, info.page+1, info.pages, xp, pct*100, exact, time.Since(t0).Seconds())
 	}
 }
@@ -94,6 +96,30 @@ func runMapAll(id string, samples int) {
 		fmt.Printf("%d\t%s\t%s\t%d\n", page, xp, text, back)
 	}
 	fmt.Fprintf(os.Stderr, "%s: %d positions, %d exact round trips\n", info.name, total, okTrips)
+}
+
+// runTOC shows the EPUB's table of contents and the chapter anchors (if the
+// reader's table of contents for the current layout is known).
+func runTOC(id string) {
+	info, ok := readBookInfo(id)
+	bk, err := loadBook(id)
+	if !ok || err != nil {
+		fmt.Println("unknown book", id, err)
+		os.Exit(1)
+	}
+	fmt.Printf("%s: %d chapter files, %d table of contents entries\n", info.name, len(bk.epub.frags), len(bk.epub.toc))
+	for i, e := range bk.epub.toc {
+		if i < 8 || i == len(bk.epub.toc)-1 {
+			fmt.Printf("  %-50s DocFragment[%d] #%s\n", trunc(e.title, 50), e.frag, e.anchor)
+		}
+	}
+	as := chapterAnchors(bk, info.pages)
+	fmt.Printf("chapter anchors for the current layout: %d\n", len(as))
+	for i, a := range as {
+		if i < 8 || i == len(as)-1 {
+			fmt.Printf("  page %4d  DocFragment[%d]  text index %d\n", a.page+1, a.frag, a.norm)
+		}
+	}
 }
 
 func runMap(id, mode, value string, rest []string) {
