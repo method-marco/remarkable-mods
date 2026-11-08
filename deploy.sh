@@ -4,6 +4,9 @@
 #   ./deploy.sh <mod> [host]              install   (host default: root@10.11.99.1 = USB)
 #   ./deploy.sh <mod> [host] --uninstall  uninstall
 #
+# Mods that contain a program (kosync-native-reader, sleepscreen-rotate) are built
+# first if needed: this needs Docker on this computer.
+#
 # The SSH password is shown on the device under
 # Settings > General > About > Copyrights and licenses (developer mode).
 set -e
@@ -16,6 +19,11 @@ if [ -z "$MOD" ] || [ ! -f "$MOD/install.sh" ]; then
     echo "usage: $0 <mod> [host] [--uninstall]"; echo "mods:"
     for d in */install.sh; do echo "  ${d%/install.sh}"; done
     exit 1
+fi
+
+# Mods with a program build it first (in Docker) if it's missing or outdated.
+if [ "$ACTION" = install.sh ] && [ -f "$MOD/build.sh" ]; then
+    sh "$MOD/build.sh" --if-needed
 fi
 
 # One SSH connection for both steps, so the password is only asked once.

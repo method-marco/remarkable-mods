@@ -76,9 +76,10 @@ with its digest and the position of its current page.
 
 ## Build
 
-`./build.sh` rebuilds `kosync-bridge` in Docker (golang image, no network, no third-party
-code). The repository contains a prebuilt binary, so building is only needed after
-changing `bridge/`.
+`deploy.sh` builds `kosync-bridge` from `bridge/` automatically when it's missing or
+older than its source (`./build.sh --if-needed`), in Docker (golang image, no network,
+no third-party code). `./build.sh` forces a rebuild. The program isn't stored in the
+repository.
 
 ## Notes
 

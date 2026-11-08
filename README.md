@@ -25,6 +25,10 @@ Vellum package. Every folder has a README with details.
 3. For `koreader-library-sync`: KOReader installed (e.g. as an AppLoad app).
 4. For `kosync-native-reader`: after installing, log in to your sync server in the built-in
    reader (open an EPUB > three dots > *Progress sync*).
+5. For `kosync-native-reader` and `sleepscreen-rotate`: **Docker** on your computer (e.g.
+   Docker Desktop, running). These mods contain a small program (Go, standard library
+   only) that `deploy.sh` builds in Docker the first time and after source changes; the
+   repository holds only the source.
 
 ## Install
 
@@ -39,7 +43,8 @@ Wi-Fi (`root@<device-ip>`):
 ```
 
 `deploy.sh` copies the folder over SSH and runs its installer (asks for the SSH password
-once). Alternatively copy a folder to the device yourself and run `sh install.sh` there.
+once). Alternatively copy a folder to the device yourself and run `sh install.sh` there (for
+`kosync-native-reader` and `sleepscreen-rotate` run its `./build.sh` first).
 
 ### Everything, in a good order
 

@@ -37,8 +37,9 @@ an empty one) the stock sleep screen is shown.
 From the repo root: `./deploy.sh sleepscreen-rotate`. **The reMarkable UI restarts once**
 (closes open apps like KOReader). Then create the "Screensaver" folder in the library.
 
-`./build.sh` rebuilds `sleepscreen-library` in Docker (only needed after changing
-`library/`; the repository contains a prebuilt binary).
+`deploy.sh` builds `sleepscreen-library` from `library/` automatically when it's missing
+or older than its source (`./build.sh --if-needed`), in Docker (needs Docker on your
+computer). `./build.sh` forces a rebuild. The program isn't stored in the repository.
 
 ## Notes
 

@@ -2,3 +2,5 @@
 kosync-native-reader/bridge/kosync-bridge.bin
 sleepscreen-rotate/sleepscreen-library-darwin
 sleepscreen-rotate/library/*.bin
+kosync-native-reader/kosync-bridge
+sleepscreen-rotate/sleepscreen-library
