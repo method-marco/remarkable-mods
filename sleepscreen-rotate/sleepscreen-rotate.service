@@ -5,6 +5,7 @@ After=xochitl.service
 [Service]
 Type=simple
 ExecStart=/home/root/bin/sleepscreen-rotate.sh
+Nice=10
 Restart=always
 RestartSec=10
 

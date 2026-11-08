@@ -1,7 +1,7 @@
 #!/bin/sh
 # Remove the sleep screen rotation and restore the stock sleep screen.
 # Run ON THE DEVICE as root. Restarts the reMarkable UI once.
-# Pass --purge to also delete /home/root/sleepscreens (your pictures).
+# Pass --purge to also delete /home/root/sleepscreens (converted copies only).
 UNIT=sleepscreen-rotate.service
 CONF=/home/root/.config/remarkable/xochitl.conf
 
@@ -17,7 +17,8 @@ mount -o remount,rw / && mount --bind / "$ROOT" && {
 rmdir "$ROOT" 2>/dev/null
 mount -o remount,ro / 2>/dev/null
 systemctl daemon-reload
-rm -f /home/root/bin/sleepscreen-rotate.sh
+rm -f /home/root/bin/sleepscreen-rotate.sh /home/root/bin/sleepscreen-library
+rm -rf /home/root/sleepscreens/library  # converted copies only; the library documents stay
 
 if grep -q "^SleepScreenPath=" "$CONF"; then
     echo "Restarting the reMarkable UI to restore the stock sleep screen..."

@@ -2,8 +2,8 @@
 # Install the random sleep screen rotation on a reMarkable. Run ON THE DEVICE as
 # root from this folder (deploy.sh in the repo root does that for you over SSH).
 #
-# - Pictures: any PNGs in ./images/ are copied to /home/root/sleepscreens/.
-#   They should match the screen size (see prepare-images.sh).
+# - Pictures: the images in the library folder "Screensaver" (converted on the
+#   device by sleepscreen-library), kept in sync with that folder.
 # - Sets xochitl's custom sleep screen (SleepScreenPath) to
 #   /home/root/sleepscreens/.current.png. This RESTARTS the reMarkable UI once.
 # - Installs a systemd service on the real root filesystem so it survives
@@ -19,37 +19,16 @@ if ! strings /usr/bin/xochitl 2>/dev/null | grep -qx SleepScreenPath; then
     exit 1
 fi
 
-# 1. Pictures: mirror ./images/ into $DIR. ./images/ is the only source:
-#    identical pictures are left alone, missing/changed ones copied, all others deleted.
-#    Without ./images/ the pictures already on the device are left untouched.
+# 1. Pictures come only from the library folder "Screensaver" (sleepscreen-library
+#    converts them into $DIR/library/). PNGs left from older versions are removed.
 mkdir -p "$DIR" /home/root/bin
-if ls "$HERE"/images/*.png >/dev/null 2>&1; then
-    added=0; kept=0; removed=0
-    for f in "$HERE"/images/*.png; do
-        dst="$DIR/$(basename "$f")"
-        if [ -f "$dst" ] && cmp -s "$f" "$dst"; then
-            kept=$((kept + 1))
-        else
-            cp "$f" "$dst.tmp" && mv -f "$dst.tmp" "$dst"
-            echo "add    $(basename "$f")"; added=$((added + 1))
-        fi
-    done
-    for p in "$DIR"/*.png; do
-        [ -f "$p" ] || continue
-        if [ ! -f "$HERE/images/$(basename "$p")" ]; then
-            rm -f "$p"; echo "delete $(basename "$p")"; removed=$((removed + 1))
-        fi
-    done
-    # Forget the last pick if that picture was deleted.
-    [ -f "$DIR/.last" ] && [ ! -f "$(cat "$DIR/.last")" ] && rm -f "$DIR/.last"
-    echo "Pictures: $added added, $kept unchanged, $removed deleted"
-else
-    echo "No ./images/ to install (run prepare-images.sh first) - pictures on the device left as they are."
-fi
-ls "$DIR"/*.png >/dev/null 2>&1 || echo "WARNING: no PNGs in $DIR yet - add some, rotation starts once there are pictures."
+rm -f "$DIR"/*.png "$DIR/.last"
 [ -f "$DIR/.current.png" ] || cp /usr/share/remarkable/suspended.png "$DIR/.current.png"
 cp "$HERE/sleepscreen-rotate.sh" /home/root/bin/sleepscreen-rotate.sh
 chmod +x /home/root/bin/sleepscreen-rotate.sh
+cp "$HERE/sleepscreen-library" /home/root/bin/sleepscreen-library.new
+chmod +x /home/root/bin/sleepscreen-library.new
+mv -f /home/root/bin/sleepscreen-library.new /home/root/bin/sleepscreen-library
 
 # 2. systemd unit on the real rootfs (on newer OS versions /etc is a RAM overlay,
 #    so writing to /etc directly would be lost at reboot)
@@ -87,4 +66,5 @@ fi
 systemctl restart "$UNIT"
 sleep 2
 systemctl is-active --quiet "$UNIT" && echo "Installed and running." || { echo "Service failed to start:"; journalctl -u "$UNIT" -n 10 --no-pager; exit 1; }
-echo "Pictures: $DIR  (add/remove PNGs any time)"
+echo "Pictures: the images in the library folder \"Screensaver\" (checked at every wake)"
+echo "Log: journalctl -u $UNIT -f"

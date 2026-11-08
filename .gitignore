@@ -1,3 +1,4 @@
-sleepscreen-rotate/images/
 .DS_Store
 kosync-native-reader/bridge/kosync-bridge.bin
+sleepscreen-rotate/sleepscreen-library-darwin
+sleepscreen-rotate/library/*.bin

@@ -8,7 +8,7 @@ Vellum package. Every folder has a README with details.
 | Mod | What it does | Needs |
 | --- | --- | --- |
 | [`koreader-library-sync/`](koreader-library-sync/) | Every EPUB in your reMarkable library shows up in KOReader, synced on each KOReader launch. | KOReader |
-| [`sleepscreen-rotate/`](sleepscreen-rotate/) | Your own pictures as the sleep screen, a random one each time. | – (prepare pictures first, see below) |
+| [`sleepscreen-rotate/`](sleepscreen-rotate/) | Your own pictures as the sleep screen, a random one each time: the images in the library folder "Screensaver". | – |
 | [`secondary-pen-toolbar/`](secondary-pen-toolbar/) | The built-in second pen in the notes toolbar, right after the first pen. | xovi |
 | [`eraser-end-uses-eraser-tool/`](eraser-end-uses-eraser-tool/) | The Marker's eraser end erases with the Eraser tool's type and size. | xovi |
 | [`kosync-native-reader/`](kosync-native-reader/) | KOReader progress sync in the built-in EPUB reader: sync panel, auto pull on open / push on close. Standalone (no KOReader needed). | xovi |
@@ -45,7 +45,6 @@ once). Alternatively copy a folder to the device yourself and run `sh install.sh
 
 ```sh
 ./deploy.sh koreader-library-sync         # then restart KOReader once
-./sleepscreen-rotate/prepare-images.sh ~/Pictures/Sleepscreens
 ./deploy.sh sleepscreen-rotate            # restarts the reMarkable UI once
 ./deploy.sh secondary-pen-toolbar         # restarts the UI (if xovi is running)
 ./deploy.sh eraser-end-uses-eraser-tool   # restarts the UI (if xovi is running)
@@ -56,9 +55,9 @@ once). Alternatively copy a folder to the device yourself and run `sh install.sh
   the built-in reader open the very same EPUB files, so they sync with each other too.
 - Installing a xovi mod while xovi isn't running is fine: the patch loads the next time
   you start xovi.
-- `sleepscreen-rotate`: `prepare-images.sh <folder>` turns a folder of photos into
-  screen-sized PNGs (add `1620x2160` for Paper Pro, `1404x1872` for reMarkable 2). The
-  folder is mirrored: re-run both commands after adding or removing photos.
+- `sleepscreen-rotate`: create a folder "Screensaver" in the reMarkable library and add
+  images to it (e.g. with the reMarkable app). The rotation follows that folder (images
+  added or deleted), checked each time the reMarkable wakes up.
 
 ## After a reMarkable OS update
 
