@@ -1,0 +1,110 @@
+; sleepscreen-rotate: show the current sleep screen picture behind the passcode
+; entry that appears on wake (only used when a passcode is set).
+;
+; The picture is /home/root/sleepscreens/.current.png, the same file xochitl shows
+; as the sleep screen. The title, passcode dots and keypad sit on a white card so
+; they stay readable on any picture.
+;
+; sleepscreen-rotate.sh keeps the picture while the passcode screen is up (going
+; back to sleep without unlocking shows the same picture again) and only picks the
+; next one after unlocking (xochitl logs "lock changed: true/false").
+
+; The passcode page (shared by all passcode screens): optional background picture.
+; Without sleepscreenBackground set (all other passcode screens) nothing changes.
+AFFECT /qt/qml/xofm/libs/pincode/qml/PincodeDialogPage.qml
+    TRAVERSE InputBlocker
+        LOCATE AFTER ALL
+        INSERT {
+            property string sleepscreenBackground: ""
+
+            Image {
+                id: sleepscreenBackgroundImage
+                anchors.fill: parent
+                z: 0.1
+                source: root.sleepscreenBackground
+                cache: false
+                fillMode: Image.PreserveAspectCrop
+                visible: root.sleepscreenBackground !== "" && status === Image.Ready
+                // The page may paint itself white, which would hide anything placed
+                // behind it (negative z). So the picture and cards sit above the page's
+                // own background, and the page's content is raised above them.
+                Component.onCompleted: {
+                    for (const item of [navigationBar, pincodeWidgetRow, pincodeDialog, actionButton, unlockWidgetRow]) {
+                        item.z = 2;
+                    }
+                    pinTitle.z = 3;
+                }
+            }
+
+            // white cards behind the content
+            Rectangle {
+                readonly property int pad: 32
+                z: 1
+                visible: sleepscreenBackgroundImage.visible
+                color: "white"
+                radius: 24
+                border.color: "black"
+                border.width: 2
+                x: pincodeDialog.x - pad
+                width: pincodeDialog.width + 2 * pad
+                y: (pinTitle.visible ? Math.min(pinTitle.y, pincodeDialog.y) : pincodeDialog.y) - pad
+                height: pincodeDialog.y + pincodeDialog.height + pad - y
+            }
+            Rectangle {
+                readonly property Item target: actionButton.visible ? actionButton : unlockWidgetRow
+                z: 1
+                visible: sleepscreenBackgroundImage.visible && target.visible && target.width > 0
+                color: "white"
+                radius: 24
+                border.color: "black"
+                border.width: 2
+                x: target.x - 24
+                y: target.y - 16
+                width: target.width + 48
+                height: target.height + 32
+            }
+            Rectangle {
+                z: 1
+                visible: sleepscreenBackgroundImage.visible && pincodeWidgetRow.visible && pincodeWidgetRow.width > 0
+                color: "white"
+                radius: 24
+                border.color: "black"
+                border.width: 2
+                x: pincodeWidgetRow.x - 16
+                y: pincodeWidgetRow.y
+                width: pincodeWidgetRow.width + 32
+                height: pincodeWidgetRow.height
+            }
+        }
+    END TRAVERSE
+END AFFECT
+
+; The passcode screen shown on wake.
+AFFECT /qt/qml/xofm/modules/security/pincode/qml/UnlockWindow.qml
+    TRAVERSE BaseView
+        LOCATE AFTER ALL
+        INSERT {
+            // bumped to reload the picture (it changes between sleeps)
+            property int sleepscreenReload: 0
+
+            Binding {
+                target: unlock
+                property: "sleepscreenBackground"
+                value: "file:///home/root/sleepscreens/.current.png?" + root.sleepscreenReload
+            }
+
+            Connections {
+                target: root
+                function onOpened() {
+                    root.sleepscreenReload++;
+                }
+            }
+            Connections {
+                target: root.batteryManager
+                function onDisplayStateChanged(previous, next) {
+                    root.sleepscreenReload++;
+                }
+            }
+        }
+    END TRAVERSE
+END AFFECT

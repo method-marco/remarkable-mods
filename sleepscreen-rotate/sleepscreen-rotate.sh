@@ -8,6 +8,11 @@
 # pictures the stock sleep screen is shown.
 # Wake is detected from xochitl's own log line:
 #   "Changing display state from DeepSleep to Normal"
+# With a passcode, the passcode screen shows the current picture (patch
+# sleepscreen-rotate.qmd), so the picture is kept while it's up: going back to
+# sleep without unlocking shows the same picture again. The next picture is
+# picked once the device is unlocked. xochitl logs "lock changed: true" just
+# after the wake line, so a wake is only handled after a short wait.
 
 DIR="${DIR:-/home/root/sleepscreens}"
 LIBRARY_TOOL=/home/root/bin/sleepscreen-library
@@ -56,9 +61,33 @@ on_wake() {
     convert_new
 }
 
+# After xochitl starts with a passcode set, it shows the passcode screen without
+# logging "lock changed: true": treat a (re)start as locked.
+started_locked() { [ -s /data/passcode ] && echo 1; }
+LOCKED="$(started_locked)"  # passcode screen is up
+WOKE=""          # woke while locked: pick at the unlock
+WAKE_AT=""       # wake not handled yet (time of the wake)
+LOCK_WAIT=2      # seconds to wait for the lock after a wake
+
 on_wake
-while IFS= read -r line; do
+while :; do
+    IFS= read -r -t 1 line; rc=$?
+    [ $rc -ne 0 ] && [ $rc -le 128 ] && break   # journalctl ended
+    [ $rc -ne 0 ] && line=""                     # timeout
     case "$line" in
-        *"display state from DeepSleep to Normal"*) on_wake ;;
+        *"display state from DeepSleep to Normal"*)
+            WAKE_AT=$SECONDS ;;
+        *"Started reMarkable main application"*)
+            LOCKED="$(started_locked)"; WOKE="$LOCKED"; WAKE_AT="" ;;
+        *"lock changed: true"*)
+            LOCKED=1
+            [ -n "$WAKE_AT" ] && { WAKE_AT=""; WOKE=1; convert_new; } ;;
+        *"lock changed: false"*)
+            LOCKED=""
+            [ -n "$WOKE" ] && { WOKE=""; on_wake; } ;;
     esac
+    if [ -n "$WAKE_AT" ] && [ $((SECONDS - WAKE_AT)) -ge $LOCK_WAIT ]; then
+        WAKE_AT=""
+        if [ -n "$LOCKED" ]; then WOKE=1; convert_new; else on_wake; fi
+    fi
 done < <(journalctl -f -n 0 -o cat -u xochitl)

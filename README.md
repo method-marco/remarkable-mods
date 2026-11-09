@@ -8,7 +8,7 @@ Vellum package. Every folder has a README with details.
 | Mod | What it does | Needs |
 | --- | --- | --- |
 | [`koreader-library-sync/`](koreader-library-sync/) | Every EPUB in your reMarkable library shows up in KOReader, synced on each KOReader launch. | KOReader |
-| [`sleepscreen-rotate/`](sleepscreen-rotate/) | Your own pictures as the sleep screen, a random one each time: the images in the library folder "Screensaver". | – |
+| [`sleepscreen-rotate/`](sleepscreen-rotate/) | Your own pictures as the sleep screen, a random one each time: the images in the library folder "Screensaver". With a passcode, also behind the passcode entry (xovi). | – |
 | [`secondary-pen-toolbar/`](secondary-pen-toolbar/) | The built-in second pen in the notes toolbar, right after the first pen. | xovi |
 | [`eraser-end-uses-eraser-tool/`](eraser-end-uses-eraser-tool/) | The Marker's eraser end erases with the Eraser tool's type and size. | xovi |
 | [`kosync-native-reader/`](kosync-native-reader/) | KOReader progress sync in the built-in EPUB reader: sync panel, auto pull on open / push on close. Standalone (no KOReader needed). | xovi |

@@ -19,12 +19,21 @@ mount -o remount,ro / 2>/dev/null
 systemctl daemon-reload
 rm -f /home/root/bin/sleepscreen-rotate.sh /home/root/bin/sleepscreen-library
 rm -rf /home/root/sleepscreens/library  # converted copies only; the library documents stay
+QMD=/home/root/xovi/exthome/qt-resource-rebuilder/sleepscreen-rotate.qmd
+PATCH_REMOVED=""; [ -f "$QMD" ] && { rm -f "$QMD"; PATCH_REMOVED=1; }
 
-if grep -q "^SleepScreenPath=" "$CONF"; then
+INSECURE=/data/xochitl.conf  # read instead of $CONF until the first unlock (passcode)
+if grep -q "^SleepScreenPath=" "$CONF" "$INSECURE" 2>/dev/null; then
     echo "Restarting the reMarkable UI to restore the stock sleep screen..."
     systemctl stop xochitl
-    awk '!/^(SleepScreenPath|ShowSleepScreenCarousel)=/' "$CONF" > "$CONF.new" && mv "$CONF.new" "$CONF"
+    for f in "$CONF" "$INSECURE"; do
+        [ -f "$f" ] || continue
+        awk '!/^(SleepScreenPath|ShowSleepScreenCarousel)=/' "$f" > "$f.new" && mv "$f.new" "$f"
+    done
     systemctl start xochitl
+elif [ -n "$PATCH_REMOVED" ] && [ -f /etc/systemd/system/xochitl.service.d/00-xovi.conf ]; then
+    systemctl reset-failed xochitl 2>/dev/null
+    systemctl restart xochitl
 fi
 
 [ "$1" = "--purge" ] && rm -rf /home/root/sleepscreens && echo "Pictures deleted."

@@ -6,6 +6,8 @@
 #   device by sleepscreen-library), kept in sync with that folder.
 # - Sets xochitl's custom sleep screen (SleepScreenPath) to
 #   /home/root/sleepscreens/.current.png. This RESTARTS the reMarkable UI once.
+# - With xovi + qt-resource-rebuilder: the passcode entry on wake shows the current
+#   picture as its background (sleepscreen-rotate.qmd).
 # - Installs a systemd service on the real root filesystem so it survives
 #   reboots. A reMarkable OS update removes it again: just re-run this script.
 set -e
@@ -49,20 +51,48 @@ if [ ! -e "/etc/systemd/system/$UNIT" ]; then
 fi
 systemctl daemon-reload
 
-# 3. Point xochitl at the rotating picture (xochitl must be stopped while editing)
-if ! grep -qx "SleepScreenPath=$DIR/.current.png" "$CONF" || ! grep -qx "ShowSleepScreenCarousel=false" "$CONF"; then
-    [ -f "$CONF.bak-before-sleepscreen" ] || cp "$CONF" "$CONF.bak-before-sleepscreen"
-    echo "Restarting the reMarkable UI to apply the sleep screen setting..."
-    systemctl stop xochitl
+# 3. Passcode screen patch (xovi qt-resource-rebuilder, optional): shows the
+#    current picture behind the passcode entry on wake.
+QRR=/home/root/xovi/exthome/qt-resource-rebuilder
+XOVI_ACTIVE=""; [ -f /etc/systemd/system/xochitl.service.d/00-xovi.conf ] && XOVI_ACTIVE=1
+PATCH_CHANGED=""
+if [ -d "$QRR" ]; then
+    cmp -s "$HERE/sleepscreen-rotate.qmd" "$QRR/sleepscreen-rotate.qmd" || PATCH_CHANGED=1
+    cp "$HERE/sleepscreen-rotate.qmd" "$QRR/"
+else
+    echo "xovi qt-resource-rebuilder not found: the passcode screen keeps its stock look."
+fi
+
+# 4. Point xochitl at the rotating picture (xochitl must be stopped while editing)
+# With a passcode, xochitl reads the setting from /data/xochitl.conf (outside the
+# encrypted user data) until the first unlock, so it's set there too.
+INSECURE=/data/xochitl.conf
+conf_ok() { grep -qx "SleepScreenPath=$DIR/.current.png" "$1" && grep -qx "ShowSleepScreenCarousel=false" "$1"; }
+set_conf() {
     awk -v p="$DIR/.current.png" '
         /^(SleepScreenPath|ShowSleepScreenCarousel)=/ { next }
         { print }
         /^\[General\]$/ && !done { print "ShowSleepScreenCarousel=false"; print "SleepScreenPath=" p; done = 1 }
-    ' "$CONF" > "$CONF.new" && mv "$CONF.new" "$CONF"
+    ' "$1" > "$1.new" && mv "$1.new" "$1"
+}
+if ! conf_ok "$CONF" || { [ -f "$INSECURE" ] && ! conf_ok "$INSECURE"; }; then
+    [ -f "$CONF.bak-before-sleepscreen" ] || cp "$CONF" "$CONF.bak-before-sleepscreen"
+    echo "Restarting the reMarkable UI to apply the sleep screen setting..."
+    systemctl stop xochitl
+    set_conf "$CONF"
+    if [ -f "$INSECURE" ]; then
+        [ -f "$INSECURE.bak-before-sleepscreen" ] || cp "$INSECURE" "$INSECURE.bak-before-sleepscreen"
+        set_conf "$INSECURE"
+    fi
+    systemctl reset-failed xochitl 2>/dev/null || true
     systemctl start xochitl
+elif [ -n "$PATCH_CHANGED" ] && [ -n "$XOVI_ACTIVE" ]; then
+    echo "Restarting the reMarkable UI to load the passcode screen patch..."
+    systemctl reset-failed xochitl 2>/dev/null || true
+    systemctl restart xochitl
 fi
 
-# 4. Start rotating
+# 5. Start rotating
 systemctl restart "$UNIT"
 sleep 2
 systemctl is-active --quiet "$UNIT" && echo "Installed and running." || { echo "Service failed to start:"; journalctl -u "$UNIT" -n 10 --no-pager; exit 1; }
